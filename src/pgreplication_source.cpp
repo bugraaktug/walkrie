@@ -1,0 +1,272 @@
+#include "pgreplication_source.hpp"
+
+#include <sys/select.h>
+#include <event2/event.h>
+
+#include <cstdio>
+#include <sstream>
+
+namespace pgcdc 
+{
+
+namespace 
+{
+
+std::string format_lsn(uint64_t lsn) 
+{
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%X/%X",
+                  static_cast<uint32_t>(lsn >> 32),
+                  static_cast<uint32_t>(lsn & 0xFFFFFFFF));
+    return buf;
+}
+
+uint64_t parse_lsn(const std::string& s) 
+{
+    uint32_t hi = 0, lo = 0;
+    std::sscanf(s.c_str(), "%X/%X", &hi, &lo);
+    return (static_cast<uint64_t>(hi) << 32) | lo;
+}
+
+} // namespace
+
+std::string PgReplicationConfig::to_conninfo() const 
+{
+    std::ostringstream out;
+    out << "host=" << host
+        << " port=" << port
+        << " dbname=" << dbname
+        << " user=" << user;
+    
+    if (!password.empty()) {
+        out << " password=" << password;
+    }
+    out << " replication=database";
+    
+    return out.str();
+}
+
+PgReplicationSource::PgReplicationSource(PgReplicationConfig config)
+    : config_(std::move(config)) {}
+
+PgReplicationSource::~PgReplicationSource() 
+{
+    if (read_event_) {
+        event_free(read_event_);
+        read_event_ = nullptr;
+    }
+
+    if (timer_event_) {
+        event_free(timer_event_);
+        timer_event_ = nullptr;
+    }
+
+    if (conn_) {
+        PQfinish(conn_);
+    }
+}
+
+std::string PgReplicationSource::last_error() const 
+{
+    return last_error_;
+}
+
+bool PgReplicationSource::connect() 
+{
+    const std::string conninfo = config_.to_conninfo();
+    conn_ = PQconnectdb(conninfo.c_str());
+
+    if (PQstatus(conn_) != CONNECTION_OK) {
+        last_error_ = PQerrorMessage(conn_);
+        PQfinish(conn_);
+        conn_ = nullptr;
+        return false;
+    }
+
+    std::string create_cmd = "CREATE_REPLICATION_SLOT " + config_.slot_name + " LOGICAL pgoutput";
+    PGresult* res = PQexec(conn_, create_cmd.c_str());
+
+    if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0) {
+        start_lsn_ = PQgetvalue(res, 0, 1); // column 1 = consistent_point
+        std::fprintf(stderr, "created replication slot '%s', starting at LSN %s\n",
+                     config_.slot_name.c_str(), start_lsn_.c_str());
+    } else {
+        std::fprintf(stderr,
+                      "slot creation skipped/failed (likely already exists): %s\n"
+                      "defaulting to start_lsn=0/0 \n",
+                      PQerrorMessage(conn_));
+        start_lsn_ = "0/0";
+    }
+    PQclear(res);
+
+    last_lsn_ = parse_lsn(start_lsn_);
+    last_status_update_ = std::time(nullptr);
+    return true;
+}
+
+bool PgReplicationSource::start_streaming() 
+{
+    if (!conn_) {
+        last_error_ = "start_streaming() called before a successful connect()";
+        return false;
+    }
+
+    std::ostringstream cmd;
+    cmd << "START_REPLICATION SLOT " << config_.slot_name
+        << " LOGICAL " << start_lsn_
+        << " (proto_version '1', publication_names '" << config_.publication_name << "')";
+
+    PGresult* res = PQexec(conn_, cmd.str().c_str());
+    if (PQresultStatus(res) != PGRES_COPY_BOTH) {
+        last_error_ = PQerrorMessage(conn_);
+        PQclear(res);
+        return false;
+    }
+    PQclear(res);
+
+    std::fprintf(stderr, "streaming changes from publication '%s'...\n",
+                 config_.publication_name.c_str());
+    return true;
+}
+
+void PgReplicationSource::ping_update() 
+{
+    unsigned char msg[1 + 8 + 8 + 8 + 8 + 1];
+    unsigned char* p = msg;
+    *p++ = 'r';
+
+    auto put_u64 = [&p](uint64_t v) {
+        for (int i = 7; i >= 0; --i) *p++ = static_cast<unsigned char>((v >> (i * 8)) & 0xFF);
+    };
+
+    put_u64(last_lsn_); // last written
+    put_u64(last_lsn_); // last flushed
+    put_u64(last_lsn_); // last applied
+
+    constexpr uint64_t kPgEpochOffsetSecs = 946684800ULL; // 2000-01-01 vs unix epoch
+    uint64_t now_us = (static_cast<uint64_t>(std::time(nullptr)) - kPgEpochOffsetSecs) * 1000000ULL;
+    put_u64(now_us);
+
+    *p++ = 0; // reply requested = false
+
+    if (PQputCopyData(conn_, reinterpret_cast<const char*>(msg), static_cast<int>(p - msg)) <= 0) {
+        std::fprintf(stderr, "warning: failed to send standby status update: %s\n",
+                     PQerrorMessage(conn_));
+        return;
+    }
+    PQflush(conn_);
+}
+
+// PQconsumeInput() pulls whatever's arrived on the socket into libpq's
+// internal buffer; PQgetCopyData(async=1) then hands us messages out of
+// that buffer without blocking. We loop until it returns 0 (nothing
+// more buffered right now) since a single libevent wakeup can carry
+// several queued messages, especially after a burst of writes upstream.
+void PgReplicationSource::drain_available_messages() 
+{
+   PQconsumeInput(conn_);
+ 
+    while (true) {
+        char* buf = nullptr;
+        int copy_len = PQgetCopyData(conn_, &buf, /*async=*/1);
+ 
+        if (copy_len == 0) {
+            break; // nothing more buffered right now; wait for next wakeup
+        }
+ 
+        if (copy_len < 0) {
+            last_error_ = PQerrorMessage(conn_);
+            std::fprintf(stderr, "[%s] replication stream ended: %s\n",
+                         config_.slot_name.c_str(), last_error_.c_str());
+            // Stream is over — stop watching this fd so libevent doesn't
+            // keep calling us back on a dead connection.
+            if (read_event_) {
+                event_del(read_event_);
+            }
+            if (timer_event_) {
+                event_del(timer_event_);
+            }
+            return;
+        }
+ 
+        if (buf[0] == 'k') {
+            // Primary keepalive: walsender_lsn(8) + timestamp(8) + reply_requested(1)
+            uint8_t reply_requested = static_cast<uint8_t>(buf[16]);
+            if (reply_requested) {
+                ping_update();
+                last_status_update_ = std::time(nullptr);
+            }
+        } else if (buf[0] == 'w') {
+            // XLogData: type(1) + start_lsn(8) + end_lsn(8) + send_time(8) + payload
+            const uint8_t* p = reinterpret_cast<const uint8_t*>(buf) + 1;
+            uint64_t wal_start = 0;
+            for (int i = 0; i < 8; ++i) wal_start = (wal_start << 8) | static_cast<uint8_t>(p[i]);
+            const uint8_t* payload = reinterpret_cast<const uint8_t*>(buf) + 1 + 24;
+            size_t payload_len = static_cast<size_t>(copy_len) - 1 - 24;
+ 
+            try {
+                auto event = parser_.parse(payload, payload_len);
+                if (event) {
+                    event->commit_lsn = wal_start;
+                    handle_(*event);
+                }
+            } catch (const std::exception& e) {
+                std::fprintf(stderr, "[%s] error decoding message at LSN %s: %s (skipping)\n",
+                             config_.slot_name.c_str(), format_lsn(wal_start).c_str(), e.what());
+            }
+ 
+            last_lsn_ = wal_start;
+        }
+ 
+        PQfreemem(buf);
+    }
+}
+
+void PgReplicationSource::on_read(evutil_socket_t /*fd*/, short /*events*/, void* arg) {
+    static_cast<PgReplicationSource*>(arg)->drain_available_messages();
+}
+
+void PgReplicationSource::on_timer(evutil_socket_t /*fd*/, short /*events*/, void* arg) {
+    static_cast<PgReplicationSource*>(arg)->ping_update();
+}
+
+bool PgReplicationSource::register_event_loop(event_base* base, ChangeEventFn handle) 
+{
+     if (!conn_) {
+        last_error_ = "register_event_loop() called before a successful connect()";
+        return false;
+    }
+ 
+    handle_ = handle;
+ 
+    int sock = PQsocket(conn_);
+    if (sock < 0) {
+        last_error_ = "PQsocket() returned an invalid descriptor";
+        return false;
+    }
+ 
+    read_event_ = event_new(base, sock, EV_READ | EV_PERSIST, &PgReplicationSource::on_read, this);
+    if (!read_event_) {
+        last_error_ = "event_new() failed for the replication socket";
+        return false;
+    }
+    if (event_add(read_event_, nullptr) != 0) {
+        last_error_ = "event_add() failed for the replication socket";
+        return false;
+    }
+ 
+    timer_event_ = event_new(base, -1, EV_PERSIST, &PgReplicationSource::on_timer, this);
+    if (!timer_event_) {
+        last_error_ = "event_new() failed for the standby-status timer";
+        return false;
+    }
+    struct timeval interval{10, 0}; // 10 seconds, matching the old manual check
+    if (event_add(timer_event_, &interval) != 0) {
+        last_error_ = "event_add() failed for the standby-status timer";
+        return false;
+    }
+ 
+    return true;
+}
+
+} // namespace pgcdc

@@ -1,0 +1,178 @@
+#include "pgoutput_parser.hpp"
+#include "byte_utils.hpp"
+
+#include <cstring>
+#include <stdexcept>
+
+using namespace bytes;
+
+namespace pgcdc 
+{
+
+void PgOutputParser::handle_relation(const uint8_t* data, size_t len) 
+{
+    const uint8_t* p = data;
+    const uint8_t* end = data + len;
+    (void)end; // bounds-checking omitted in this sketch; see README "hardening" note
+
+    RelationInfo rel;
+    rel.relation_id = read_u32(p);
+    rel.schema_name = read_cstr(p);
+    rel.table_name = read_cstr(p);
+
+    uint8_t replica_identity = read_u8(p); // 'd'/'n'/'f'/'i' — unused for now
+    (void)replica_identity;
+
+    uint16_t num_columns = read_u16(p);
+    rel.column_names.reserve(num_columns);
+
+    for (uint16_t i = 0; i < num_columns; ++i) {
+        uint8_t flags = read_u8(p); // bit 1 = part of key; unused for now
+        (void)flags;
+        std::string col_name = read_cstr(p);
+        /* uint32_t type_oid = */ read_u32(p);
+        /* int32_t type_modifier = */ read_u32(p);
+        rel.column_names.push_back(std::move(col_name));
+    }
+
+    relations_[rel.relation_id] = std::move(rel);
+}
+
+DecodedRow PgOutputParser::decode_tuple(const RelationInfo& rel, const uint8_t*& p, const uint8_t* end, TupleKind kind) 
+{
+    (void)end;
+    DecodedRow row;
+    row.schema_name = rel.schema_name;
+    row.table_name = rel.table_name;
+    row.kind = kind;
+
+    uint16_t num_columns = read_u16(p); // matches rel.column_names.size()
+
+    for (uint16_t i = 0; i < num_columns; ++i) {
+        ColumnValue cv;
+        cv.name = (i < rel.column_names.size()) ? rel.column_names[i] : "";
+
+        uint8_t kind_byte = read_u8(p); // 'n' = null, 'u' = unchanged toast, 't' = text data follows
+        if (kind_byte == 'n') {
+            cv.is_null = true;
+        } else if (kind_byte == 'u') {
+            cv.is_unchanged_toast = true;
+        } else if (kind_byte == 't') {
+            uint32_t value_len = read_u32(p);
+            cv.text_value.assign(reinterpret_cast<const char*>(p), value_len);
+            p += value_len;
+        } else {
+            throw std::runtime_error("pgoutput: unexpected tuple column kind byte");
+        }
+
+        row.columns.push_back(std::move(cv));
+    }
+
+    return row;
+}
+
+std::optional<ChangeEvent> PgOutputParser::parse(const uint8_t* data, size_t len) 
+{
+    if (len == 0) return std::nullopt;
+
+    const uint8_t* p = data;
+    const uint8_t* end = data + len;
+    uint8_t msg_type = read_u8(p);
+
+    switch (msg_type) {
+        case 'B': // Begin — carries final LSN + commit timestamp + xid.
+            // We don't need anything from Begin for week 1; Commit's LSN is
+            // what we actually checkpoint against.
+            return std::nullopt;
+
+        case 'C': // Commit
+            // flags(1) + commit_lsn(8) + end_lsn(8) + timestamp(8)
+            // We don't surface this as its own event; main.cpp uses the
+            // XLogData header's LSN (passed in separately) for checkpointing.
+            return std::nullopt;
+
+        case 'R': // Relation
+            handle_relation(p, static_cast<size_t>(end - p));
+            return std::nullopt;
+
+        case 'Y': // Type — type OID -> name mapping for composite/enum/etc.
+            return std::nullopt; // not needed for week 1 (we treat everything as text)
+
+        case 'O': // Origin
+            return std::nullopt;
+
+        case 'T': // Truncate
+            // num_relations(4) + flags(1) + relation_id[]... — worth logging
+            // a warning for in main.cpp later; not modeled as a ChangeEvent yet.
+            return std::nullopt;
+
+        case 'I': { // Insert
+            uint32_t rel_id = read_u32(p);
+            auto it = relations_.find(rel_id);
+            if (it == relations_.end()) {
+                throw std::runtime_error("pgoutput: Insert for unknown relation (missing Relation message)");
+            }
+            uint8_t tuple_tag = read_u8(p); // 'N' = new tuple follows
+            (void)tuple_tag;
+            DecodedRow new_row = decode_tuple(it->second, p, end, TupleKind::Insert);
+
+            ChangeEvent ev;
+            ev.op = ChangeEvent::Op::Insert;
+            ev.schema_name = it->second.schema_name;
+            ev.table_name = it->second.table_name;
+            ev.new_row = std::move(new_row);
+            return ev;
+        }
+
+        case 'U': { // Update
+            uint32_t rel_id = read_u32(p);
+            auto it = relations_.find(rel_id);
+            if (it == relations_.end()) {
+                throw std::runtime_error("pgoutput: Update for unknown relation (missing Relation message)");
+            }
+
+            ChangeEvent ev;
+            ev.op = ChangeEvent::Op::Update;
+            ev.schema_name = it->second.schema_name;
+            ev.table_name = it->second.table_name;
+
+            uint8_t tag = read_u8(p);
+            // 'K' = old tuple is key-only (REPLICA IDENTITY DEFAULT, no real change in non-key cols sent)
+            // 'O' = old tuple is full old row (REPLICA IDENTITY FULL — what setup.sql configures)
+            // 'N' = new tuple (always present)
+            if (tag == 'K' || tag == 'O') {
+                ev.old_row = decode_tuple(it->second, p, end, TupleKind::UpdateOld);
+                tag = read_u8(p); // consume the following 'N' tag
+            }
+            if (tag == 'N') {
+                ev.new_row = decode_tuple(it->second, p, end, TupleKind::UpdateNew);
+            }
+            return ev;
+        }
+
+        case 'D': { // Delete
+            uint32_t rel_id = read_u32(p);
+            auto it = relations_.find(rel_id);
+            if (it == relations_.end()) {
+                throw std::runtime_error("pgoutput: Delete for unknown relation (missing Relation message)");
+            }
+
+            ChangeEvent ev;
+            ev.op = ChangeEvent::Op::Delete;
+            ev.schema_name = it->second.schema_name;
+            ev.table_name = it->second.table_name;
+
+            uint8_t tag = read_u8(p); // 'K' (key-only) or 'O' (full old row, our setup)
+            ev.old_row = decode_tuple(it->second, p, end, TupleKind::Delete);
+            (void)tag;
+            return ev;
+        }
+
+        default:
+            // Unknown/unhandled message type. Don't crash the daemon over a
+            // message kind we haven't modeled yet — log and skip.
+            return std::nullopt;
+    }
+}
+
+} // namespace pgcdc
