@@ -47,12 +47,13 @@ int main(int argc, char** argv)
             event_base_free(base);
             return 1;
         }
-        if (!source->start_streaming()) {
+ 
+	if (!source->start_streaming()) {
             std::cerr << "start_streaming failed: " << source->last_error() << "\n";
             event_base_free(base);
             return 1;
         }
-        
+	
 	if (!source->register_event_loop(base, dispatch_handle)) 
 	{
             std::cerr << "start_event_loop failed: " << source->last_error() << "\n";
