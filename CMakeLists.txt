@@ -28,12 +28,17 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBEVENT REQUIRED libevent)
 
-include_directories(${PG_INCLUDE_DIR} ${LIBEVENT_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/include)
+include_directories(${PG_INCLUDE_DIR} 
+		    ${LIBEVENT_INCLUDE_DIRS} 
+		    ${CMAKE_SOURCE_DIR}/include
+		    ${CMAKE_SOURCE_DIR}/src/queue
+	    	   )
 link_directories(${PG_LIB_DIR} ${LIBEVENT_LIBRARY_DIRS})
 
 add_executable(walkrie
   src/main.cpp
   src/byte_utils.cpp
+  src/event_dispatcher.cpp
   src/pgoutput_parser.cpp
   src/pgreplication_source.cpp
 )
