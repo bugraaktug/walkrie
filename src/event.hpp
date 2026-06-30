@@ -38,15 +38,15 @@ struct DecodedRow
 
     friend void to_json(ordered_json& j, const DecodedRow& row) {
         for (size_t i = 0; i < row.columns.size(); ++i) {
-	    const auto& col = row.columns[i];
-	    if (col.is_null) {
-		j[col.name] = "null";
-	    } else if (col.is_unchanged_toast) {
-		j[col.name] = "__unchanged_toast__";
-	    } else {
-		j[col.name] = col.text_value;
+	        const auto& col = row.columns[i];
+	        if (col.is_null) {
+		        j[col.name] = "null";
+	        } else if (col.is_unchanged_toast) {
+		        j[col.name] = "__unchanged_toast__";
+	        } else {
+		        j[col.name] = col.text_value;
+	        }
 	    }
-	}
     }
 };
 
@@ -64,28 +64,28 @@ struct ChangeEvent
     static std::string to_string(const Op& k)
     {
         switch (k) {
-	    case Op::Insert: return "insert";
-	    case Op::Update: return "update";
-	    case Op::Delete: return "delete";
-	}
-	return "unhandled";
+            case Op::Insert: return "insert";
+            case Op::Update: return "update";
+            case Op::Delete: return "delete";
+        }
+	    return "unhandled";
     }
 
     friend void to_json(ordered_json& j, const ChangeEvent& e) {
         j = ordered_json{
-	    {"op", to_string(e.op)},
-	    {"schema", e.schema_name},
-	    {"table", e.table_name},
-	    {"lsn", e.commit_lsn}
+            {"op", to_string(e.op)},
+	        {"schema", e.schema_name},
+	        {"table", e.table_name},
+	        {"lsn", e.commit_lsn}
         };
-
-	if (e.old_row) {
-	    j["old"] = *e.old_row;
-	}
-
-	if (e.new_row) {
-	    j["new"] = *e.new_row;
-	}
+        
+        if (e.old_row) {
+            j["old"] = *e.old_row;
+	    }
+        
+        if (e.new_row) {
+	        j["new"] = *e.new_row;
+        }
 
     }
 };
