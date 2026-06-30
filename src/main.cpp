@@ -36,9 +36,9 @@ int main(int argc, char** argv)
     pgcdc::EventDispatcher dispatcher; 
     
     auto dispatch_handle = [&dispatcher](const pgcdc::ChangeEvent& event) {
-	//auto j = ordered_json(event);
-	//std::cout << j.dump(2) << "\n";
-	dispatcher.post_job(event);
+        //auto j = ordered_json(event);
+	    //std::cout << j.dump(2) << "\n";
+	    dispatcher.post_job(event);
     };
 
     for (auto& source : sources) {
@@ -47,15 +47,14 @@ int main(int argc, char** argv)
             event_base_free(base);
             return 1;
         }
- 
-	if (!source->start_streaming()) {
+        if (!source->start_streaming()) {
             std::cerr << "start_streaming failed: " << source->last_error() << "\n";
             event_base_free(base);
             return 1;
         }
-	
-	if (!source->register_event_loop(base, dispatch_handle)) 
-	{
+        
+        if (!source->register_event_loop(base, dispatch_handle)) 
+        {
             std::cerr << "start_event_loop failed: " << source->last_error() << "\n";
             event_base_free(base);
             return 1;
