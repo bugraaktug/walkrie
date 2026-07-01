@@ -68,13 +68,13 @@ struct ChangeEvent
             case Op::Update: return "update";
             case Op::Delete: return "delete";
         }
-	    return "unhandled";
+        return "unhandled";
     }
 
     friend void to_json(ordered_json& j, const ChangeEvent& e) {
         j = ordered_json{
-            {"op", to_string(e.op)},
-	        {"schema", e.schema_name},
+		    {"op", to_string(e.op)},
+		    {"schema", e.schema_name},
 	        {"table", e.table_name},
 	        {"lsn", e.commit_lsn}
         };
@@ -86,7 +86,6 @@ struct ChangeEvent
         if (e.new_row) {
 	        j["new"] = *e.new_row;
         }
-
     }
 };
 

@@ -35,10 +35,19 @@ int main(int argc, char** argv)
 
     pgcdc::EventDispatcher dispatcher; 
     
-    auto dispatch_handle = [&dispatcher](const pgcdc::ChangeEvent& event) {
-        //auto j = ordered_json(event);
-	    //std::cout << j.dump(2) << "\n";
-	    dispatcher.post_job(event);
+    struct JsonPrintSink : pgcdc::EventSink {
+	void call(const pgcdc::ChangeEvent& event) override {
+	    auto j = ordered_json(event);
+            std::cout << j.dump(2) << "\n";
+        }
+    }; 
+    auto print_event_job = std::make_shared<JsonPrintSink>();
+
+    auto dispatch_handle = [&](const pgcdc::ChangeEvent& event) {
+        pgcdc::EventJob job;
+	job.ev = event;
+	job.sink = print_event_job;
+	dispatcher.post_job(std::move(job));
     };
 
     for (auto& source : sources) {
