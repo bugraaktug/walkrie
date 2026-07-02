@@ -28,6 +28,20 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBEVENT REQUIRED libevent)
 
+
+# llama.cpp — built as part of this project via add_subdirectory.
+# EXCLUDE_FROM_ALL keeps llama.cpp's own example binaries from being built
+# unless explicitly requested. Set LLAMA_DIR on the cmake command line if
+# your checkout is somewhere other than ~/llama.cpp:
+#   cmake -DLLAMA_DIR=/path/to/llama.cpp ..
+set(LLAMA_DIR "$ENV{HOME}/llama.cpp" CACHE PATH "Path to llama.cpp source checkout")
+# Disable everything in llama.cpp we don't need — keeps build times down
+set(LLAMA_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
+
+add_subdirectory(${LLAMA_DIR} ${CMAKE_BINARY_DIR}/llama_build EXCLUDE_FROM_ALL)
+
 include_directories(${PG_INCLUDE_DIR} 
 		    ${LIBEVENT_INCLUDE_DIRS} 
 		    ${CMAKE_SOURCE_DIR}/include
@@ -41,9 +55,18 @@ add_executable(walkrie
   src/event_dispatcher.cpp
   src/pgoutput_parser.cpp
   src/pgreplication_source.cpp
+  src/pgembedding_sink.cpp
+)
+
+target_include_directories(walkrie PRIVATE
+  ${LLAMA_DIR}/include
+  ${LLAMA_DIR}/ggml/include
 )
 
 target_link_libraries(walkrie PRIVATE 
 		      pq
 		      ${LIBEVENT_LIBRARIES}
-		      nlohmann_json::nlohmann_json)
+		      nlohmann_json::nlohmann_json
+		      llama
+		      ggml
+)

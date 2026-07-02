@@ -8,18 +8,11 @@
 #include <memory>
 #include "readerwriterqueue.hpp"
 
+#include "event_sink.hpp"
 #include "pgoutput_parser.hpp"
-
-using ChangeEventFn = std::function<void(const pgcdc::ChangeEvent&)>;
 
 namespace pgcdc 
 {
-
-struct EventSink 
-{
-    virtual void call(const pgcdc::ChangeEvent&) = 0;
-    virtual ~EventSink() = default;
-};
 
 struct EventJob 
 {

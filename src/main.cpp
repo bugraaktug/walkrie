@@ -5,7 +5,34 @@
 
 #include "readerwriterqueue.hpp"
 #include "event_dispatcher.hpp"
+#include "pgembedding_sink.hpp"
 #include "pgreplication_source.hpp"
+
+std::shared_ptr<pgcdc::EventSink> create_json_print_sink()
+{
+    struct JsonPrintSink : pgcdc::EventSink {
+        void call(const pgcdc::ChangeEvent& event) override {
+	        auto j = ordered_json(event);
+                std::cout << j.dump(2) << "\n";
+            }
+    }; 
+    return std::make_shared<JsonPrintSink>();
+}
+
+
+std::shared_ptr<pgcdc::EventSink> create_pg_embedding_sink()
+{
+    pgcdc::PgEmbeddingSinkConfig emb_config;
+    emb_config.model_path    = "/home/debian/models/bge-m3/bge-m3-Q4_K_M.gguf";
+    emb_config.embed_column  = "name";
+    emb_config.n_threads     = 2;
+    emb_config.pg_conninfo   = "host=localhost dbname=qdb user=quser password=quser1234";
+
+    auto pg_sink = std::make_shared<pgcdc::PgEmbeddingSink>(emb_config);
+    pg_sink->init(); // loads model + connects pg — throws on failure
+
+    return pg_sink;
+}
 
 int main(int argc, char** argv) 
 {
@@ -34,20 +61,12 @@ int main(int argc, char** argv)
     sources.push_back(std::make_unique<pgcdc::PgReplicationSource>(config_pgcdc));
 
     pgcdc::EventDispatcher dispatcher; 
-    
-    struct JsonPrintSink : pgcdc::EventSink {
-	void call(const pgcdc::ChangeEvent& event) override {
-	    auto j = ordered_json(event);
-            std::cout << j.dump(2) << "\n";
-        }
-    }; 
-    auto print_event_job = std::make_shared<JsonPrintSink>();
-
+    auto sink_job = create_pg_embedding_sink();
     auto dispatch_handle = [&](const pgcdc::ChangeEvent& event) {
         pgcdc::EventJob job;
-	job.ev = event;
-	job.sink = print_event_job;
-	dispatcher.post_job(std::move(job));
+	    job.ev = event;
+	    job.sink = sink_job;
+	    dispatcher.post_job(std::move(job));
     };
 
     for (auto& source : sources) {
