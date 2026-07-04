@@ -1,0 +1,38 @@
+# pgcdc / walkrie config
+# Pass path to this file as the only CLI arg: ./walkrie /path/to/config.toml
+
+[[source]]
+host        = "localhost"
+port        = "5432"
+dbname      = "qdb"
+user        = "quser"
+password    = "quser1234"
+slot_name   = "cdc_slot"
+publication = "test_pub"
+
+[[source]]
+host        = "localhost"
+port        = "5432"
+dbname      = "qdb"
+user        = "quser"
+password    = "quser1234"
+slot_name   = "pgcdc_slot"
+publication = "pgcdc_pub"
+
+[sink]
+host     = "localhost"
+port     = "5432"
+dbname   = "qdb"
+user     = "quser"
+password = "quser1234"
+table    = "public.test_embeddings"
+
+[embedding]
+provider     = "llamac"    # "llama" for local BGE-M3, "openai" for OpenAI API (future)
+model_path   = "/home/debian/models/bge-m3/bge-m3-Q4_K_M.gguf"
+api_key      = ""         # only used when provider = "openai"
+embed_column = "name"     # column in source table whose text gets embedded
+id_column    = "id"       # primary key column in source table
+dimensions   = 1024       # must match model output and pgvector column size
+n_threads    = 4          # CPU threads for llama.cpp inference
+n_ctx        = 512        # context window — 512 is enough for short text columns

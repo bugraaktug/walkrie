@@ -6,30 +6,24 @@
 #include <string>
 #include <vector>
  
+#include "embedding_provider.hpp"
 #include "event_sink.hpp"
  
 namespace pgcdc 
 {
- 
-struct PgEmbeddingSinkConfig 
+struct PgEmbeddingSinkConfig
 {
-    std::string model_path;         // path to bge-m3-Q4_K_M.gguf
-    int         n_threads   = 4;    // CPU threads for inference
-    int         n_ctx       = 512;  // context window — 512 is enough for short text columns
- 
-    std::string embed_column = "name"; // test_table.name in your case
+    std::string pg_conninfo;
     std::string sink_table   = "public.test_embeddings";
-    std::string pg_conninfo; // e.g. "host=localhost dbname=qdb user=quser password=..."
+    std::string embed_column = "name";
+    std::string id_column    = "id";
 };
 
-// Owns one llama_model + llama_context (loaded once at construction) and
-// one PGconn to the sink database. Both are long-lived for the process
-// lifetime — model loading is expensive (~1-2s), so it must not happen
-// per-event.
 class PgEmbeddingSink : public EmbeddingSink 
 {
 public:
-    explicit PgEmbeddingSink(PgEmbeddingSinkConfig config);
+    explicit PgEmbeddingSink(PgEmbeddingSinkConfig config, 
+		    	     std::shared_ptr<EmbeddingProvider> provider);
     ~PgEmbeddingSink() override;
  
     PgEmbeddingSink(const PgEmbeddingSink&) = delete;
@@ -40,18 +34,15 @@ public:
  
 private:
     PgEmbeddingSinkConfig config_;
- 
-    llama_model*   model_   = nullptr;
-    llama_context* ctx_     = nullptr;
- 
+    std::shared_ptr<EmbeddingProvider> provider_; 
     PGconn* pg_ = nullptr;
 
     bool upsert(const std::string& item_id,
                 const std::string& item_name,
                 const std::vector<float>& embedding); 
     bool remove(const std::string& item_id);
-    std::vector<float> embed(const std::string& text); // Produces a normalized 1024-float embedding for the given text.
     static std::string get_column(const DecodedRow& row, const std::string& col_name);
+    static bool  is_toast  (const DecodedRow& row, const std::string& col_name);
 };
  
 } // namespace pgcdc

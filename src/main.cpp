@@ -3,6 +3,7 @@
 #include <vector>
 #include <event2/event.h>
 
+#include "config.hpp"
 #include "readerwriterqueue.hpp"
 #include "event_dispatcher.hpp"
 #include "pgembedding_sink.hpp"
@@ -12,44 +13,70 @@ std::shared_ptr<pgcdc::EventSink> create_json_print_sink()
 {
     struct JsonPrintSink : pgcdc::EventSink {
         void call(const pgcdc::ChangeEvent& event) override {
-	        auto j = ordered_json(event);
-                std::cout << j.dump(2) << "\n";
-            }
+	    auto j = ordered_json(event);
+            std::cout << j.dump(2) << "\n";
+	}
     }; 
     return std::make_shared<JsonPrintSink>();
 }
 
 
-std::shared_ptr<pgcdc::EventSink> create_pg_embedding_sink()
+std::shared_ptr<pgcdc::EventSink> create_pgembedding_sink(const pgcdc::AppConfig& cfg)
 {
-    pgcdc::PgEmbeddingSinkConfig emb_config;
-    emb_config.model_path    = "/home/debian/models/bge-m3/bge-m3-Q4_K_M.gguf";
-    emb_config.embed_column  = "name";
-    emb_config.n_threads     = 2;
-    emb_config.pg_conninfo   = "host=localhost dbname=qdb user=quser password=quser1234";
+    std::shared_ptr<pgcdc::EmbeddingProvider> provider;
+    try {
+        provider = pgcdc::make_embedding_provider(cfg.embedding);
+        provider->init();
+    } catch (const std::exception& e) {
+        std::cerr << "embedding provider init failed: " << e.what() << "\n";
+        throw std::runtime_error("EmbeddingProvider: failed to create context");
+    }
 
-    auto pg_sink = std::make_shared<pgcdc::PgEmbeddingSink>(emb_config);
-    pg_sink->init(); // loads model + connects pg — throws on failure
+    // --- PgEmbeddingSink config from AppConfig ---
+    pgcdc::PgEmbeddingSinkConfig sink_cfg;
+    {
+        std::ostringstream conn;
+        conn << "host="     << cfg.sink.host
+             << " port="    << cfg.sink.port
+             << " dbname="  << cfg.sink.dbname
+             << " user="    << cfg.sink.user
+             << " password=" << cfg.sink.password;
+        sink_cfg.pg_conninfo  = conn.str();
+        sink_cfg.sink_table   = cfg.sink.table;
+        sink_cfg.embed_column = cfg.embedding.embed_column;
+        sink_cfg.id_column    = cfg.embedding.id_column;
+    }
+
+    auto pg_sink = std::make_shared<pgcdc::PgEmbeddingSink>(sink_cfg, provider);
+    pg_sink->init();
 
     return pg_sink;
 }
 
 int main(int argc, char** argv) 
 {
-    pgcdc::PgReplicationConfig config_test;
-    config_test.dbname = "qdb";
-    config_test.user = "quser";
-    config_test.password = "quser1234";
-    config_test.slot_name = "cdc_slot";
-    config_test.publication_name = "test_pub";
-    
-    pgcdc::PgReplicationConfig config_pgcdc;
-    config_pgcdc.dbname = "qdb";
-    config_pgcdc.user = "quser";
-    config_pgcdc.password = "quser1234";
-    config_pgcdc.slot_name = "pgcdc_slot";
-    config_pgcdc.publication_name = "pgcdc_pub";
-    
+    if (argc != 2) {
+        std::cerr << "usage: " << argv[0] << " <config.toml>\n"
+                  << "example: " << argv[0] << " /etc/walkrie/config.toml\n";
+        return 1;
+    }
+
+    pgcdc::AppConfig cfg;
+    try {
+        cfg = pgcdc::load_config(argv[1]);
+    } catch (const std::exception& e) {
+        std::cerr << "error: " << e.what() << "\n";
+        return 1;
+    }
+
+    auto errors = cfg.validate();
+    if (!errors.empty()) {
+        std::cerr << "config validation failed:\n";
+        for (auto& e : errors) 
+	    std::cerr << "  - " << e << "\n";
+        return 1;
+    }
+
     event_base* base = event_base_new();
     if (!base) {
         std::cerr << "event_base_new() failed\n";
@@ -57,20 +84,30 @@ int main(int argc, char** argv)
     }
   
     std::vector<std::unique_ptr<pgcdc::PgReplicationSource>> sources;
-    sources.push_back(std::make_unique<pgcdc::PgReplicationSource>(config_test));
-    sources.push_back(std::make_unique<pgcdc::PgReplicationSource>(config_pgcdc));
+    for (const auto& src : cfg.sources) {
+        pgcdc::PgReplicationConfig src_config;
+	src_config.host             = src.host;
+	src_config.port             = src.port;
+    	src_config.dbname           = src.dbname;
+    	src_config.user             = src.user;
+    	src_config.password         = src.password;
+    	src_config.slot_name        = src.slot_name;
+    	src_config.publication_name = src.publication;
+    	sources.push_back(std::make_unique<pgcdc::PgReplicationSource>(src_config));
+    }
+
 
     pgcdc::EventDispatcher dispatcher; 
 
     std::vector<std::shared_ptr<pgcdc::EventSink>> sinks;
-    sinks.push_back(create_pg_embedding_sink());
+    sinks.push_back(create_pgembedding_sink(cfg));
     sinks.push_back(create_json_print_sink());
 
     auto dispatch_handle = [&](const pgcdc::ChangeEvent& event) {
-		pgcdc::EventJob job;
-		job.ev = event;
-		job.sinks = sinks;
-		dispatcher.post_job(std::move(job));
+	pgcdc::EventJob job;
+	job.ev = event;
+	job.sinks = sinks;
+	dispatcher.post_job(std::move(job));
     };
 
     for (auto& source : sources) {

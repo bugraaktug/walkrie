@@ -46,6 +46,8 @@ add_subdirectory(${LLAMA_DIR} ${CMAKE_BINARY_DIR}/llama_build EXCLUDE_FROM_ALL)
 include_directories(${PG_INCLUDE_DIR} 
 		    ${LIBEVENT_INCLUDE_DIRS} 
 		    ${CMAKE_SOURCE_DIR}/include
+		    ${CMAKE_SOURCE_DIR}/src/include
+		    ${CMAKE_SOURCE_DIR}/src/third_party
 		    ${CMAKE_SOURCE_DIR}/src/queue
 	    	   )
 link_directories(${PG_LIB_DIR} ${LIBEVENT_LIBRARY_DIRS})
@@ -56,6 +58,9 @@ add_executable(walkrie
   src/event_dispatcher.cpp
   src/pgoutput_parser.cpp
   src/pgreplication_source.cpp
+  src/llama_provider.cpp
+  src/openai_provider.cpp
+  src/embedding_provider.cpp
   src/pgembedding_sink.cpp
 )
 
