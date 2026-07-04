@@ -17,7 +17,7 @@ namespace pgcdc
 struct EventJob 
 {
     ChangeEvent ev;
-    std::shared_ptr<EventSink> sink; // shared, not per-job allocated
+    std::vector<std::shared_ptr<EventSink>> sinks;
 };
 
 class EventDispatcher 

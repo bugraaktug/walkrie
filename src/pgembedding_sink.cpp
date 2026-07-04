@@ -13,16 +13,16 @@ PgEmbeddingSink::PgEmbeddingSink(PgEmbeddingSinkConfig config)
 PgEmbeddingSink::~PgEmbeddingSink() 
 {
     if (ctx_) { 
-	llama_free(ctx_);        
-	ctx_ = nullptr; 
+        llama_free(ctx_);        
+	    ctx_ = nullptr; 
     }
     if (model_) { 
-	llama_model_free(model_); 
-	model_ = nullptr; 
+	    llama_model_free(model_); 
+	    model_ = nullptr; 
     }
     if (pg_) { 
-	PQfinish(pg_);            
-	pg_ = nullptr; 
+	    PQfinish(pg_);            
+	    pg_ = nullptr; 
     }
 }
 
@@ -81,29 +81,75 @@ void PgEmbeddingSink::init()
 
 void PgEmbeddingSink::call(const ChangeEvent& event) {
     switch (event.op) {
-	case ChangeEvent::Op::Insert: {
+	    case ChangeEvent::Op::Insert: {
     	    std::fprintf(stderr, "[EmbeddingSink] insert\n");
-	    
-	    if (!event.new_row) 
-		return;
-	    
-	    const std::string text = get_column(*event.new_row, config_.embed_column);
-	    if (text.empty()) 
-		return;
-	    const std::string id   = get_column(*event.new_row, "id");
-	    auto vec = embed(text);
-	    if (vec.empty()) 
-		return;
+            if (!event.new_row) 
+		        return;
+            const std::string text = get_column(*event.new_row, config_.embed_column);
+	        if (text.empty()) 
+		        return;
+	        const std::string id   = get_column(*event.new_row, "id");
+	        auto vec = embed(text);
+	        if (vec.empty()) 
+		        return;
         
-	    upsert(id, text, vec);
-	    break;
+	        upsert(id, text, vec);
+	        break;
     	}
     	case ChangeEvent::Op::Update: {
     	    std::fprintf(stderr, "[EmbeddingSink] update\n");
+            if (!event.new_row) 
+                return;
+            
+            const std::string new_text = get_column(*event.new_row, config_.embed_column);
+            const std::string id       = get_column(*event.new_row, "id");
+ 
+            // This is the core value proposition: skip the embedding API call
+            // entirely if the embeddable column didn't change.
+            //
+            // Three cases where we skip:
+            //   1. new value is unchanged_toast — Postgres didn't resend it
+            //      because it didn't change (see ColumnValue::is_unchanged_toast)
+            //   2. old and new text values are identical strings
+            //   3. new text is empty/null — nothing to embed
+            if (event.old_row) {
+                const std::string old_text = get_column(*event.old_row, config_.embed_column);
+ 
+                // Check if the column was marked unchanged_toast in the new row
+                // — this means it definitely didn't change, skip without comparing
+                for (const auto& col : event.new_row->columns) {
+                    if (col.name == config_.embed_column && col.is_unchanged_toast) {
+                        std::fprintf(stderr, "[EmbeddingSink] skip update id=%s: %s unchanged (toast)\n",
+                                    id.c_str(), config_.embed_column.c_str());
+                        return;
+                    }
+                }
+ 
+                // Full string compare: skip if text is identical
+                if (!old_text.empty() && old_text == new_text) {
+                    std::fprintf(stderr, "[EmbeddingSink] skip update id=%s: %s unchanged\n",
+                                id.c_str(), config_.embed_column.c_str());
+                    return;
+                }
+            }
+ 
+            if (new_text.empty()) 
+                return;
+ 
+            auto vec = embed(new_text);
+            if (vec.empty()) 
+                return;
+            upsert(id, new_text, vec);
             break;
     	}
     	case ChangeEvent::Op::Delete: {
     	    std::fprintf(stderr, "[EmbeddingSink] delete\n");
+            if (!event.old_row) 
+                return;
+        
+            const std::string id = get_column(*event.old_row, "id");
+            if (!id.empty()) 
+                remove(id);
             break;
     	}
     }
@@ -169,7 +215,8 @@ std::string PgEmbeddingSink::get_column(const DecodedRow& row, const std::string
 {
     for (const auto& col : row.columns) {
         if (col.name == col_name) {
-            if (col.is_null || col.is_unchanged_toast) return "";
+            if (col.is_null || col.is_unchanged_toast) 
+                return "";
             return col.text_value;
         }
     }
@@ -178,13 +225,14 @@ std::string PgEmbeddingSink::get_column(const DecodedRow& row, const std::string
 
 
 bool PgEmbeddingSink::upsert(const std::string& item_id,
-			     const std::string& item_name,
-                             const std::vector<float>& embedding) {
-    
+                             const std::string& item_name,
+                             const std::vector<float>& embedding) 
+{
     std::ostringstream vec_str;
     vec_str << "[";
     for (size_t i = 0; i < embedding.size(); ++i) {
-        if (i > 0) vec_str << ",";
+        if (i > 0) 
+            vec_str << ",";
         vec_str << embedding[i];
     }
     vec_str << "]";
@@ -214,6 +262,24 @@ bool PgEmbeddingSink::upsert(const std::string& item_id,
                      item_id.c_str(), PQerrorMessage(pg_));
     } else {
         std::fprintf(stderr, "[EmbeddingSink] upserted item_id=%s\n", item_id.c_str());
+    }
+    PQclear(res);
+    return ok;
+}
+
+bool PgEmbeddingSink::remove(const std::string& item_id) 
+{
+    const char* sql =
+        "DELETE FROM public.test_embeddings WHERE item_id = $1";
+    const char* params[1] = { item_id.c_str() };
+
+    PGresult* res = PQexecParams(pg_, sql, 1, nullptr, params, nullptr, nullptr, 0);
+    bool ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
+    if (!ok) {
+        std::fprintf(stderr, "[EmbeddingSink] delete failed for item_id=%s: %s\n",
+                     item_id.c_str(), PQerrorMessage(pg_));
+    } else {
+        std::fprintf(stderr, "[EmbeddingSink] deleted item_id=%s\n", item_id.c_str());
     }
     PQclear(res);
     return ok;

@@ -61,12 +61,16 @@ int main(int argc, char** argv)
     sources.push_back(std::make_unique<pgcdc::PgReplicationSource>(config_pgcdc));
 
     pgcdc::EventDispatcher dispatcher; 
-    auto sink_job = create_pg_embedding_sink();
+
+    std::vector<std::shared_ptr<pgcdc::EventSink>> sinks;
+    sinks.push_back(create_pg_embedding_sink());
+    sinks.push_back(create_json_print_sink());
+
     auto dispatch_handle = [&](const pgcdc::ChangeEvent& event) {
-        pgcdc::EventJob job;
-	    job.ev = event;
-	    job.sink = sink_job;
-	    dispatcher.post_job(std::move(job));
+		pgcdc::EventJob job;
+		job.ev = event;
+		job.sinks = sinks;
+		dispatcher.post_job(std::move(job));
     };
 
     for (auto& source : sources) {

@@ -49,6 +49,7 @@ private:
     bool upsert(const std::string& item_id,
                 const std::string& item_name,
                 const std::vector<float>& embedding); 
+    bool remove(const std::string& item_id);
     std::vector<float> embed(const std::string& text); // Produces a normalized 1024-float embedding for the given text.
     static std::string get_column(const DecodedRow& row, const std::string& col_name);
 };

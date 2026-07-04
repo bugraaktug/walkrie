@@ -24,10 +24,16 @@ void EventDispatcher::process_jobs()
     pgcdc::EventJob current_job;
     while (running_.load(std::memory_order_acquire) || queue_.size_approx() > 0) {
         if (queue_.try_dequeue(current_job)) {
-	        std::cout << "received change event job \n";
-            current_job.sink->call(current_job.ev);    
-	    }
-	    else {
+	    for (auto& sink : current_job.sinks) {
+                try {
+                    sink->call(current_job.ev);
+                } catch (const std::exception& e) {
+                    std::fprintf(stderr, "sink error: %s\n", e.what());
+                    // continue to next sink — one bad sink doesn't kill the others
+                }
+            }
+	}
+	else {
             std::this_thread::sleep_for(std::chrono::microseconds(100));
         }
     }
