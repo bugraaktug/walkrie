@@ -13,9 +13,9 @@ std::shared_ptr<pgcdc::EventSink> create_json_print_sink()
 {
     struct JsonPrintSink : pgcdc::EventSink {
         void call(const pgcdc::ChangeEvent& event) override {
-	    auto j = ordered_json(event);
+	        auto j = ordered_json(event);
             std::cout << j.dump(2) << "\n";
-	}
+	    }
     }; 
     return std::make_shared<JsonPrintSink>();
 }
@@ -86,8 +86,8 @@ int main(int argc, char** argv)
     std::vector<std::unique_ptr<pgcdc::PgReplicationSource>> sources;
     for (const auto& src : cfg.sources) {
         pgcdc::PgReplicationConfig src_config;
-	src_config.host             = src.host;
-	src_config.port             = src.port;
+	    src_config.host             = src.host;
+	    src_config.port             = src.port;
     	src_config.dbname           = src.dbname;
     	src_config.user             = src.user;
     	src_config.password         = src.password;
@@ -104,10 +104,10 @@ int main(int argc, char** argv)
     sinks.push_back(create_json_print_sink());
 
     auto dispatch_handle = [&](const pgcdc::ChangeEvent& event) {
-	pgcdc::EventJob job;
-	job.ev = event;
-	job.sinks = sinks;
-	dispatcher.post_job(std::move(job));
+	    pgcdc::EventJob job;
+	    job.ev = event;
+	    job.sinks = sinks;
+	    dispatcher.post_job(std::move(job));
     };
 
     for (auto& source : sources) {
