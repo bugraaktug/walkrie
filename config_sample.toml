@@ -1,5 +1,7 @@
-# pgcdc / walkrie config
+# walkrie config
 # Pass path to this file as the only CLI arg: ./walkrie /path/to/config.toml
+# walkrie config
+# Usage: ./walkrie /path/to/config.toml
 
 [[source]]
 host        = "localhost"
@@ -9,6 +11,7 @@ user        = "quser"
 password    = "quser1234"
 slot_name   = "cdc_slot"
 publication = "test_pub"
+
 
 [[source]]
 host        = "localhost"
@@ -27,12 +30,36 @@ user     = "quser"
 password = "quser1234"
 table    = "public.test_embeddings"
 
+ [[sink.table_mapping]]
+ source_table = "test_table"
+
+    [[sink.table_mapping.columns]]
+    source_column = "id"
+    sink_column   = "item_id"
+    role          = "id"
+
+    [[sink.table_mapping.columns]]
+    source_column = "name"
+    sink_column   = "item_name"
+    role          = "embed"
+
+ [[sink.table_mapping]]
+ source_table = "documents"
+
+    [[sink.table_mapping.columns]]
+    source_column = "id"
+    sink_column   = "item_id"
+    role          = "id"
+
+    [[sink.table_mapping.columns]]
+    source_column = "body"
+    sink_column   = "item_name"
+    role          = "embed"
+
 [embedding]
-provider     = "llama"    # "llama" for local BGE-M3, "openai" for OpenAI API (future)
-model_path   = "/home/debian/models/bge-m3/bge-m3-Q4_K_M.gguf"
-api_key      = ""         # only used when provider = "openai"
-embed_column = "name"     # column in source table whose text gets embedded
-id_column    = "id"       # primary key column in source table
-dimensions   = 1024       # must match model output and pgvector column size
-n_threads    = 4          # CPU threads for llama.cpp inference
-n_ctx        = 512        # context window — 512 is enough for short text columns
+provider   = "llama"
+model_path = "/home/debian/models/bge-m3/bge-m3-Q4_K_M.gguf"
+api_key    = ""
+dimensions = 1024
+n_threads  = 4
+n_ctx      = 512

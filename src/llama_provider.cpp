@@ -75,8 +75,8 @@ std::vector<float> LlamaProvider::embed(const std::string& text)
     llama_memory_clear(llama_get_memory(ctx_), true);
 
     llama_batch batch = llama_batch_get_one(tokens.data(), n_tokens);
-    if (llama_decode(ctx_, batch) != 0) {
-        std::fprintf(stderr, "[LlamaProvider] llama_decode failed\n");
+    if (llama_encode(ctx_, batch) != 0) {
+        std::fprintf(stderr, "[LlamaProvider] llama_encode failed\n");
         return {};
     }
 

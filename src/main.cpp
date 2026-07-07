@@ -20,7 +20,6 @@ std::shared_ptr<pgcdc::EventSink> create_json_print_sink()
     return std::make_shared<JsonPrintSink>();
 }
 
-
 std::shared_ptr<pgcdc::EventSink> create_pgembedding_sink(const pgcdc::AppConfig& cfg)
 {
     std::shared_ptr<pgcdc::EmbeddingProvider> provider;
@@ -41,12 +40,10 @@ std::shared_ptr<pgcdc::EventSink> create_pgembedding_sink(const pgcdc::AppConfig
              << " dbname="  << cfg.sink.dbname
              << " user="    << cfg.sink.user
              << " password=" << cfg.sink.password;
-        sink_cfg.pg_conninfo  = conn.str();
-        sink_cfg.sink_table   = cfg.sink.table;
-        sink_cfg.embed_column = cfg.embedding.embed_column;
-        sink_cfg.id_column    = cfg.embedding.id_column;
+        sink_cfg.pg_conninfo = conn.str();
+        sink_cfg.sink_table  = cfg.sink.table;
+        sink_cfg.mappings    = cfg.sink.table_mappings;
     }
-
     auto pg_sink = std::make_shared<pgcdc::PgEmbeddingSink>(sink_cfg, provider);
     pg_sink->init();
 
@@ -73,7 +70,7 @@ int main(int argc, char** argv)
     if (!errors.empty()) {
         std::cerr << "config validation failed:\n";
         for (auto& e : errors) 
-	    std::cerr << "  - " << e << "\n";
+	        std::cerr << "  - " << e << "\n";
         return 1;
     }
 
@@ -82,7 +79,9 @@ int main(int argc, char** argv)
         std::cerr << "event_base_new() failed\n";
         return 1;
     }
-  
+    
+    pgcdc::EventDispatcher dispatcher; 
+    
     std::vector<std::unique_ptr<pgcdc::PgReplicationSource>> sources;
     for (const auto& src : cfg.sources) {
         pgcdc::PgReplicationConfig src_config;
@@ -95,9 +94,6 @@ int main(int argc, char** argv)
     	src_config.publication_name = src.publication;
     	sources.push_back(std::make_unique<pgcdc::PgReplicationSource>(src_config));
     }
-
-
-    pgcdc::EventDispatcher dispatcher; 
 
     std::vector<std::shared_ptr<pgcdc::EventSink>> sinks;
     sinks.push_back(create_pgembedding_sink(cfg));

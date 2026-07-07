@@ -40,7 +40,7 @@ struct DecodedRow
         for (size_t i = 0; i < row.columns.size(); ++i) {
 	        const auto& col = row.columns[i];
 	        if (col.is_null) {
-		        j[col.name] = "null";
+		        j[col.name] = nullptr;
 	        } else if (col.is_unchanged_toast) {
 		        j[col.name] = "__unchanged_toast__";
 	        } else {
