@@ -2,12 +2,35 @@
 #include <memory>
 #include <vector>
 #include <event2/event.h>
+#include <spdlog/spdlog.h>
+#include <spdlog/async.h> // Required for async thread pool
+#include <spdlog/sinks/rotating_file_sink.h>
 
 #include "config.hpp"
 #include "readerwriterqueue.hpp"
 #include "event_dispatcher.hpp"
 #include "pgembedding_sink.hpp"
 #include "pgreplication_source.hpp"
+
+void init_logger() {
+    try {
+        spdlog::init_thread_pool(8192, 1);
+        auto async_file_logger = spdlog::create_async<spdlog::sinks::rotating_file_sink_mt>(
+            "walkrie",
+            "/tmp/logs/walkrie.log",
+            1024 * 1024 * 10, // 10 Megabytes max file size
+            5                 // Keep up to 5 historical backup files
+        );
+        spdlog::set_default_logger(async_file_logger);
+        spdlog::set_level(spdlog::level::debug);
+        spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%t] [%l] %v"); // [%t] prints thread ID
+        spdlog::flush_every(std::chrono::seconds(3));
+
+        spdlog::info("Walkrie system up and running...");
+    } catch (const spdlog::spdlog_ex& e) {
+        std::cerr << "Asynchronous log initialization failed %s\n: " << e.what() << "\n";
+    }
+}
 
 std::shared_ptr<pgcdc::EventSink> create_json_print_sink()
 {
@@ -58,6 +81,7 @@ int main(int argc, char** argv)
                   << "example: " << argv[0] << " /etc/walkrie/config.toml\n";
         return 1;
     }
+    init_logger();
 
     pgcdc::AppConfig cfg;
     try {
@@ -135,5 +159,8 @@ int main(int argc, char** argv)
     }
 
     event_base_free(base);
+    
+    spdlog::shutdown();
+    
     return 0;
 }

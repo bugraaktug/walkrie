@@ -25,6 +25,7 @@ endif()
 
 
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(spdlog CONFIG REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBEVENT REQUIRED libevent)
 
@@ -73,6 +74,7 @@ target_link_libraries(walkrie PRIVATE
 		      pq
 		      ${LIBEVENT_LIBRARIES}
 		      nlohmann_json::nlohmann_json
+              spdlog::spdlog_header_only
 		      llama
 		      ggml
 )
