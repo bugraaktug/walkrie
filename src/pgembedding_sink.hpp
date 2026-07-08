@@ -1,7 +1,6 @@
 #pragma once
  
 #include <libpq-fe.h>
-#include <llama.h>
  
 #include <string>
 #include <vector>
@@ -17,6 +16,7 @@ struct PgEmbeddingSinkConfig
 {
     std::string pg_conninfo;
     std::string sink_table;
+    std::string sink_column;
     std::vector<TableMapping> mappings;
 };
 
@@ -42,7 +42,7 @@ private:
     std::string build_upsert_sql(const TableMapping& tm);
 
     bool upsert(const TableMapping& tm,
-		const std::string& id_value,
+		        const std::string& id_value,
                 const std::string& embed_text,
                 const std::vector<std::string>& metadata_values,
                 const std::vector<float>& embedding);

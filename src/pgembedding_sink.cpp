@@ -87,8 +87,8 @@ std::string PgEmbeddingSink::build_upsert_sql(const TableMapping& tm)
     }
 
     // last param = embedding vector
-    sink_cols.push_back("embedding");
-    update_cols.push_back("embedding");
+    sink_cols.push_back(config_.sink_column);
+    update_cols.push_back(config_.sink_column);
 
     // Build column list
     std::ostringstream col_list, val_list, update_list;
@@ -97,7 +97,7 @@ std::string PgEmbeddingSink::build_upsert_sql(const TableMapping& tm)
             col_list << ", "; val_list << ", "; 
         }
         col_list << sink_cols[i];
-        if (sink_cols[i] == "embedding") {
+        if (sink_cols[i] == config_.sink_column) {
             val_list << "$" << (i + 1) << "::vector";
         } else {
             val_list << "$" << (i + 1);

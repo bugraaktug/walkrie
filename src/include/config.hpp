@@ -62,6 +62,7 @@ struct SinkConfig
     std::string user;
     std::string password;
     std::string table;
+    std::string embedding_column;
     std::vector<TableMapping> table_mappings;
 };
 
@@ -106,6 +107,9 @@ struct AppConfig
 	    if (sink.table.empty()) {
             errors.push_back("[sink] table is required");
         }
+	    if (sink.embedding_column.empty()) {
+            errors.push_back("[sink] embedding column is required");
+        }
         if (embedding.provider != "llama" && embedding.provider != "openai") {
             errors.push_back("[embedding] provider must be 'llama' or 'openai'");
         }
@@ -118,7 +122,6 @@ struct AppConfig
 	    if (embedding.dimensions <= 0) {
             errors.push_back("[embedding] dimensions must be > 0");
         }
-   
         if (sink.table_mappings.empty())
             errors.push_back("[sink] at least one [[sink.table_mapping]] block is required");
 
@@ -130,32 +133,6 @@ struct AppConfig
             if (tm.embed_source_.empty())
                 errors.push_back("[sink.table_mapping:" + tm.source_table + "] needs a mapping with role='embed'");
         }
- 
-        /* 
-        // Mapping validation — need at least one "id" and one "embed" role
-        bool has_id    = false;
-        bool has_embed = false;
-        for (const auto& m : sink.mappings) {
-            if (m.source_column.empty()) {
-                errors.push_back("[sink.mapping] source_column is required");
-            }
-            if (m.sink_column.empty()) {
-                errors.push_back("[sink.mapping] sink_column is required");
-            }
-            if (m.role != "id" && m.role != "embed" && m.role != "metadata") {
-                errors.push_back("[sink.mapping] role must be 'id', 'embed', or 'metadata' (got '" + m.role + "')");
-            }
-            if (m.role == "id")     has_id    = true;
-            if (m.role == "embed")  has_embed = true;
-        }
-
-        if (!has_id) {
-            errors.push_back("[sink.mapping] at least one mapping with role = 'id' is required");
-        }
-        if (!has_embed) {
-            errors.push_back("[sink.mapping] at least one mapping with role = 'embed' is required");
-        }
-        */
         return errors;
     }
 };
@@ -231,6 +208,7 @@ inline AppConfig load_config(const std::string& path)
                     cfg.sink.table_mappings.push_back(tm);
             }
         }
+        cfg.sink.embedding_column = str(s, "embed_column",    cfg.sink.embedding_column);
     }
 
 

@@ -52,6 +52,8 @@ private:
     event* read_event_ = nullptr;
     event* timer_event_ = nullptr;
 
+    void resume_slot();
+
     void ping_update();
     void drain_available_messages();
 

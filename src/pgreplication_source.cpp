@@ -71,6 +71,32 @@ std::string PgReplicationSource::last_error() const
     return last_error_;
 }
 
+void PgReplicationSource::resume_slot()
+{
+    if (!conn_) {
+        std::fprintf(stderr, "[%s] resume_slot() called before connect()\n",
+                     config_.slot_name.c_str());
+        start_lsn_ = "0/0";
+        return;
+    }
+    std::string resume_query = "SELECT confirmed_flush_lsn FROM pg_replication_slots "
+                               "WHERE slot_name = '" + config_.slot_name + "'";
+
+    PGresult* resume_res = PQexec(conn_, resume_query.c_str());
+    if (PQresultStatus(resume_res) == PGRES_TUPLES_OK &&
+        PQntuples(resume_res) > 0 &&
+        !PQgetisnull(resume_res, 0, 0)) {
+        start_lsn_ = PQgetvalue(resume_res, 0, 0);
+        std::fprintf(stderr, "[%s] slot exists, resuming from LSN %s\n",
+                     config_.slot_name.c_str(), start_lsn_.c_str());
+    } else {
+        start_lsn_ = "0/0";
+        std::fprintf(stderr, "[%s] slot exists but no confirmed LSN yet, "
+                     "starting from beginning of retained WAL\n", config_.slot_name.c_str());
+    }
+    PQclear(resume_res);
+}
+
 bool PgReplicationSource::connect() 
 {
     const std::string conninfo = config_.to_conninfo();
@@ -90,14 +116,11 @@ bool PgReplicationSource::connect()
         start_lsn_ = PQgetvalue(res, 0, 1); // column 1 = consistent_point
         std::fprintf(stderr, "created replication slot '%s', starting at LSN %s\n",
                      config_.slot_name.c_str(), start_lsn_.c_str());
+        PQclear(res);
     } else {
-        std::fprintf(stderr,
-                      "slot creation skipped/failed (likely already exists): %s\n"
-                      "defaulting to start_lsn=0/0 \n",
-                      PQerrorMessage(conn_));
-        start_lsn_ = "0/0";
+        PQclear(res);
+        resume_slot();
     }
-    PQclear(res);
 
     last_lsn_ = parse_lsn(start_lsn_);
     last_status_update_ = std::time(nullptr);
@@ -165,61 +188,59 @@ void PgReplicationSource::ping_update()
 void PgReplicationSource::drain_available_messages() 
 {
    PQconsumeInput(conn_);
+
+   while (true) {
+       char* buf = nullptr;
+       int copy_len = PQgetCopyData(conn_, &buf, /*async=*/1);
  
-    while (true) {
-        char* buf = nullptr;
-        int copy_len = PQgetCopyData(conn_, &buf, /*async=*/1);
- 
-        if (copy_len == 0) {
+       if (copy_len == 0) {
             break; // nothing more buffered right now; wait for next wakeup
-        }
+       }
  
-        if (copy_len < 0) {
-            last_error_ = PQerrorMessage(conn_);
-            std::fprintf(stderr, "[%s] replication stream ended: %s\n",
-                         config_.slot_name.c_str(), last_error_.c_str());
-            // Stream is over — stop watching this fd so libevent doesn't
-            // keep calling us back on a dead connection.
-            if (read_event_) {
-                event_del(read_event_);
-            }
-            if (timer_event_) {
-                event_del(timer_event_);
-            }
-            return;
-        }
+       if (copy_len < 0) {
+           last_error_ = PQerrorMessage(conn_);
+           std::fprintf(stderr, "[%s] replication stream ended: %s\n",
+                        config_.slot_name.c_str(), last_error_.c_str());
+           // Stream is over — stop watching this fd so libevent doesn't
+           // keep calling us back on a dead connection.
+           if (read_event_) {
+               event_del(read_event_);
+           }
+           if (timer_event_) {
+               event_del(timer_event_);
+           }
+           return;
+       }
+       if (buf[0] == 'k') {
+           // Primary keepalive: walsender_lsn(8) + timestamp(8) + reply_requested(1)
+           uint8_t reply_requested = static_cast<uint8_t>(buf[16]);
+           if (reply_requested) {
+               ping_update();
+               last_status_update_ = std::time(nullptr);
+           }
+       } else if (buf[0] == 'w') {
+           // XLogData: type(1) + start_lsn(8) + end_lsn(8) + send_time(8) + payload
+           const uint8_t* p = reinterpret_cast<const uint8_t*>(buf) + 1;
+           uint64_t wal_start = 0;
+           for (int i = 0; i < 8; ++i) wal_start = (wal_start << 8) | static_cast<uint8_t>(p[i]);
+           const uint8_t* payload = reinterpret_cast<const uint8_t*>(buf) + 1 + 24;
+           size_t payload_len = static_cast<size_t>(copy_len) - 1 - 24;
  
-        if (buf[0] == 'k') {
-            // Primary keepalive: walsender_lsn(8) + timestamp(8) + reply_requested(1)
-            uint8_t reply_requested = static_cast<uint8_t>(buf[16]);
-            if (reply_requested) {
-                ping_update();
-                last_status_update_ = std::time(nullptr);
-            }
-        } else if (buf[0] == 'w') {
-            // XLogData: type(1) + start_lsn(8) + end_lsn(8) + send_time(8) + payload
-            const uint8_t* p = reinterpret_cast<const uint8_t*>(buf) + 1;
-            uint64_t wal_start = 0;
-            for (int i = 0; i < 8; ++i) wal_start = (wal_start << 8) | static_cast<uint8_t>(p[i]);
-            const uint8_t* payload = reinterpret_cast<const uint8_t*>(buf) + 1 + 24;
-            size_t payload_len = static_cast<size_t>(copy_len) - 1 - 24;
+           try {
+               auto event = parser_.parse(payload, payload_len);
+               if (event) {
+                   event->commit_lsn = wal_start;
+                   handle_(*event);
+               }
+           } catch (const std::exception& e) {
+               std::fprintf(stderr, "[%s] error decoding message at LSN %s: %s (skipping)\n",
+                            config_.slot_name.c_str(), format_lsn(wal_start).c_str(), e.what());
+           }
  
-            try {
-                auto event = parser_.parse(payload, payload_len);
-                if (event) {
-                    event->commit_lsn = wal_start;
-                    handle_(*event);
-                }
-            } catch (const std::exception& e) {
-                std::fprintf(stderr, "[%s] error decoding message at LSN %s: %s (skipping)\n",
-                             config_.slot_name.c_str(), format_lsn(wal_start).c_str(), e.what());
-            }
- 
-            last_lsn_ = wal_start;
-        }
- 
-        PQfreemem(buf);
-    }
+           last_lsn_ = wal_start;
+       }
+       PQfreemem(buf);
+   }
 }
 
 void PgReplicationSource::on_read(evutil_socket_t /*fd*/, short /*events*/, void* arg) {

@@ -12,7 +12,6 @@ password    = "quser1234"
 slot_name   = "cdc_slot"
 publication = "test_pub"
 
-
 [[source]]
 host        = "localhost"
 port        = "5432"
@@ -23,12 +22,13 @@ slot_name   = "pgcdc_slot"
 publication = "pgcdc_pub"
 
 [sink]
-host     = "localhost"
-port     = "5432"
-dbname   = "qdb"
-user     = "quser"
-password = "quser1234"
-table    = "public.test_embeddings"
+host     	= "localhost"
+port     	= "5432"
+dbname   	= "qdb"
+user     	= "quser"
+password 	= "quser1234"
+table    	= "public.test_embeddings"
+embed_column 	= "embedding"
 
  [[sink.table_mapping]]
  source_table = "test_table"

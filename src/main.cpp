@@ -42,6 +42,7 @@ std::shared_ptr<pgcdc::EventSink> create_pgembedding_sink(const pgcdc::AppConfig
              << " password=" << cfg.sink.password;
         sink_cfg.pg_conninfo = conn.str();
         sink_cfg.sink_table  = cfg.sink.table;
+        sink_cfg.sink_column = cfg.sink.embedding_column;
         sink_cfg.mappings    = cfg.sink.table_mappings;
     }
     auto pg_sink = std::make_shared<pgcdc::PgEmbeddingSink>(sink_cfg, provider);
