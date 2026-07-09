@@ -45,36 +45,58 @@ set(LLAMA_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
 add_subdirectory(${LLAMA_DIR} ${CMAKE_BINARY_DIR}/llama_build EXCLUDE_FROM_ALL)
 
 include_directories(${PG_INCLUDE_DIR} 
-		    ${LIBEVENT_INCLUDE_DIRS} 
-		    ${CMAKE_SOURCE_DIR}/include
-		    ${CMAKE_SOURCE_DIR}/src/include
-		    ${CMAKE_SOURCE_DIR}/src/third_party
-		    ${CMAKE_SOURCE_DIR}/src/queue
+                    ${LIBEVENT_INCLUDE_DIRS} 
+		            ${CMAKE_SOURCE_DIR}/include
+		            ${CMAKE_SOURCE_DIR}/src/include
+		            ${CMAKE_SOURCE_DIR}/src/third_party
+		            ${CMAKE_SOURCE_DIR}/src/queue
 	    	   )
 link_directories(${PG_LIB_DIR} ${LIBEVENT_LIBRARY_DIRS})
 
 add_executable(walkrie
-  src/main.cpp
-  src/byte_utils.cpp
-  src/event_dispatcher.cpp
-  src/pgoutput_parser.cpp
-  src/pgreplication_source.cpp
-  src/llama_provider.cpp
-  src/openai_provider.cpp
-  src/embedding_provider.cpp
-  src/pgembedding_sink.cpp
+    src/main.cpp
+    src/byte_utils.cpp
+    src/event_dispatcher.cpp
+    src/pgoutput_parser.cpp
+    src/pgreplication_source.cpp
+    src/llama_provider.cpp
+    src/openai_provider.cpp
+    src/embedding_provider.cpp
+    src/pgembedding_sink.cpp
 )
 
 target_include_directories(walkrie PRIVATE
-  ${LLAMA_DIR}/include
-  ${LLAMA_DIR}/ggml/include
+    ${LLAMA_DIR}/include
+    ${LLAMA_DIR}/ggml/include
 )
 
 target_link_libraries(walkrie PRIVATE 
-		      pq
-		      ${LIBEVENT_LIBRARIES}
-		      nlohmann_json::nlohmann_json
-              spdlog::spdlog_header_only
-		      llama
-		      ggml
+    pq
+    ${LIBEVENT_LIBRARIES}
+    nlohmann_json::nlohmann_json
+    spdlog::spdlog_header_only
+    llama
+    ggml
 )
+
+# tests - seperate binary
+add_executable(
+    walkrie_tests
+    src/tests/test_main.cpp
+    src/tests/test_config.cpp
+)
+
+target_include_directories(
+    walkrie_tests PRIVATE
+    src 
+    src/include 
+    src/third_party
+    ${LLAMA_DIR}/include
+    ${LLAMA_DIR}/ggml/include
+    ${PG_INCLUDE_DIR}
+)
+
+target_link_libraries(walkrie_tests pq)
+
+enable_testing()
+add_test(NAME unit_tests COMMAND walkrie_tests)
