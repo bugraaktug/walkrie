@@ -4,6 +4,7 @@
 #include <event2/event.h>
 
 #include <cstdio>
+#include <spdlog/spdlog.h>
 #include <sstream>
 
 namespace pgcdc 
@@ -74,7 +75,7 @@ std::string PgReplicationSource::last_error() const
 void PgReplicationSource::resume_slot()
 {
     if (!conn_) {
-        std::fprintf(stderr, "[%s] resume_slot() called before connect()\n",
+        spdlog::error("[PgReplicationSource] [{}] resume_slot() called before connect()",
                      config_.slot_name.c_str());
         start_lsn_ = "0/0";
         return;
@@ -87,12 +88,12 @@ void PgReplicationSource::resume_slot()
         PQntuples(resume_res) > 0 &&
         !PQgetisnull(resume_res, 0, 0)) {
         start_lsn_ = PQgetvalue(resume_res, 0, 0);
-        std::fprintf(stderr, "[%s] slot exists, resuming from LSN %s\n",
+        spdlog::warn("[PgReplicationSource] [{}] slot exists, resuming from LSN {}",
                      config_.slot_name.c_str(), start_lsn_.c_str());
     } else {
         start_lsn_ = "0/0";
-        std::fprintf(stderr, "[%s] slot exists but no confirmed LSN yet, "
-                     "starting from beginning of retained WAL\n", config_.slot_name.c_str());
+        spdlog::warn("[PgReplicationSource] [{}] slot exists but no confirmed LSN yet, "
+                     "starting from beginning of retained WAL", config_.slot_name.c_str());
     }
     PQclear(resume_res);
 }
@@ -114,7 +115,7 @@ bool PgReplicationSource::connect()
 
     if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0) {
         start_lsn_ = PQgetvalue(res, 0, 1); // column 1 = consistent_point
-        std::fprintf(stderr, "created replication slot '%s', starting at LSN %s\n",
+        spdlog::info("[PgReplicationSource] created replication slot '{}', starting at LSN {}",
                      config_.slot_name.c_str(), start_lsn_.c_str());
         PQclear(res);
     } else {
@@ -147,7 +148,7 @@ bool PgReplicationSource::start_streaming()
     }
     PQclear(res);
 
-    std::fprintf(stderr, "streaming changes from publication '%s'...\n",
+    spdlog::info("[PgReplicationsource] streaming changes from publication '{}'...",
                  config_.publication_name.c_str());
     return true;
 }
@@ -173,7 +174,7 @@ void PgReplicationSource::ping_update()
     *p++ = 0; // reply requested = false
 
     if (PQputCopyData(conn_, reinterpret_cast<const char*>(msg), static_cast<int>(p - msg)) <= 0) {
-        std::fprintf(stderr, "warning: failed to send standby status update: %s\n",
+        spdlog::warn("[PgReplicationSource] failed to send standby status update: {}",
                      PQerrorMessage(conn_));
         return;
     }
@@ -199,7 +200,7 @@ void PgReplicationSource::drain_available_messages()
  
        if (copy_len < 0) {
            last_error_ = PQerrorMessage(conn_);
-           std::fprintf(stderr, "[%s] replication stream ended: %s\n",
+           spdlog::info("[PgReplicationSource] [{}] replication stream ended: {}",
                         config_.slot_name.c_str(), last_error_.c_str());
            // Stream is over — stop watching this fd so libevent doesn't
            // keep calling us back on a dead connection.
@@ -233,8 +234,10 @@ void PgReplicationSource::drain_available_messages()
                    handle_(*event);
                }
            } catch (const std::exception& e) {
-               std::fprintf(stderr, "[%s] error decoding message at LSN %s: %s (skipping)\n",
-                            config_.slot_name.c_str(), format_lsn(wal_start).c_str(), e.what());
+               spdlog::error("[PgReplicationSource] [{}] error decoding message at LSN {}: {} (skipping)",
+                             config_.slot_name.c_str(), 
+                             format_lsn(wal_start).c_str(), 
+                             e.what());
            }
  
            last_lsn_ = wal_start;

@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <spdlog/spdlog.h>
 #include <sstream>
 #include <stdexcept>
 
@@ -25,7 +26,7 @@ void PgEmbeddingSink::init()
 {
     for (const auto& tm : config_.mappings) {
         upsert_sql_list_[tm.source_table] = build_upsert_sql(tm);
-        std::cout << "UPSERT SQL => \n " << upsert_sql_list_[tm.source_table] << "\n"; 
+        spdlog::debug("[PgEmbeddingSink] upsert sql for mapping {} ready - {} ", tm.source_table, upsert_sql_list_[tm.source_table]); 
     }
 
     // --- pgvector sink connection ---
@@ -34,6 +35,7 @@ void PgEmbeddingSink::init()
         std::string err = PQerrorMessage(pg_);
         PQfinish(pg_);
         pg_ = nullptr;
+        spdlog::error("[PgEmbeddingSink] pg connection failed - {} ", err); 
         throw std::runtime_error("EmbeddingSink: pg connection failed: " + err);
     }
 
@@ -43,11 +45,12 @@ void PgEmbeddingSink::init()
     bool has_vector = (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0);
     PQclear(res);
     if (!has_vector) {
+        spdlog::error("[PgEmbeddingSink] pgvector extension not installed in target db {}", config_.sink_table); 
         throw std::runtime_error("EmbeddingSink: pgvector extension not installed in target db. "
                                  "Run: CREATE EXTENSION vector;");
     }
 
-    std::fprintf(stderr, "[EmbeddingSink] pg connection ok, pgvector present\n");
+    spdlog::info("[PgEmbeddingSink] pg connection ok, pgvector present for {} table", config_.sink_table);
 }
 
 
@@ -128,20 +131,24 @@ void PgEmbeddingSink::call(const ChangeEvent& event) {
         }
     }
     if (!tm) {
-        std::cout << "No mapping configured for " << event.table_name << "\n";
+        spdlog::warn("[PgEmbeddingSink] No mapping configured for - {}", event.table_name);
         return;
     }
 
     switch (event.op) {
 	    case ChangeEvent::Op::Insert: {
-	        std::fprintf(stderr, "[EmbeddingSink] insert\n");
-            if (!event.new_row) 
+            spdlog::debug("[PgEmbeddingSink] insert event received - {}", event.table_name);
+            if (!event.new_row) { 
+                spdlog::warn("[PgEmbeddingSink] insert event dropped, no new row received - {}", event.table_name);
                 return;
+            }
             const std::string id_val    = get_column(*event.new_row, tm->id_source_);
             const std::string embed_val = get_column(*event.new_row, tm->embed_source_);
-            if (id_val.empty() || embed_val.empty()) 
+            if (id_val.empty() || embed_val.empty())
+            { 
+                spdlog::warn("[PgEmbeddingSink] insert event dropped, no id source - {}", event.table_name);
                 return;
-
+            }
             // Collect metadata values in mapping order
             std::vector<std::string> meta_vals;
             for (const auto& m : tm->columns) {
@@ -150,16 +157,20 @@ void PgEmbeddingSink::call(const ChangeEvent& event) {
             }
 
             auto vec = provider_->embed(embed_val);
-            if (vec.empty()) 
+            if (vec.empty()) { 
+                spdlog::warn("[PgEmbeddingSink] insert event dropped, no embedding value generated - {}", event.table_name);
                 return;
+            }
             upsert(*tm, id_val, embed_val, meta_vals, vec);
 	        break;
         }
         case ChangeEvent::Op::Update: {
-            std::fprintf(stderr, "[EmbeddingSink] update\n");
-            if (!event.new_row) 
+            spdlog::debug("[PgEmbeddingSink] update event received - {}", event.table_name);
+            if (!event.new_row)
+            { 
+                spdlog::warn("[PgEmbeddingSink] update event dropped, no new row received - {}", event.table_name);
                 return;
-        
+            }
             // This is the core value proposition: skip the embedding API call
             // entirely if the embeddable column didn't change.
             //
@@ -173,22 +184,28 @@ void PgEmbeddingSink::call(const ChangeEvent& event) {
 
             // Core value prop: skip embedding call if the embed column didn't change
             if (is_toast(*event.new_row, tm->embed_source_)) {
-                std::fprintf(stderr, "[PgEmbeddingSink] skip id=%s: %s unchanged (toast)\n",
-                            id_val.c_str(), tm->embed_source_.c_str());
+                spdlog::warn("[PgEmbeddingSink] update event dropped, skip id={}: {} unchanged (toast) - {}", 
+                             id_val.c_str(), 
+                             tm->embed_source_.c_str(),
+                             event.table_name);
                 return;
             }
         
             if (event.old_row) {
                 const std::string old_val = get_column(*event.old_row, tm->embed_source_);
                 if (!old_val.empty() && old_val == embed_val) {
-                    std::fprintf(stderr, "[PgEmbeddingSink] skip id=%s: %s unchanged\n",
-                                id_val.c_str(), tm->embed_source_.c_str());
+                    spdlog::warn("[PgEmbeddingSink] update event dropped, skip id={}: {} unchanged - {}",
+                                 id_val.c_str(), 
+                                 tm->embed_source_.c_str(),
+                                 event.table_name);
                     return;
                 }
             }
 
-            if (id_val.empty() || embed_val.empty()) 
+            if (id_val.empty() || embed_val.empty()) { 
+                spdlog::warn("[PgEmbeddingSink] update event dropped, no id or embedding val  - {}", event.table_name);
                 return;
+            }
 
             std::vector<std::string> meta_vals;
             for (const auto& m : tm->columns) {
@@ -197,18 +214,25 @@ void PgEmbeddingSink::call(const ChangeEvent& event) {
             }
 
             auto vec = provider_->embed(embed_val);
-            if (vec.empty()) 
+            if (vec.empty()) { 
+                spdlog::warn("[PgEmbeddingSink] update event dropped, no embedding value generated - {}", event.table_name);
                 return;
+            }
             upsert(*tm, id_val, embed_val, meta_vals, vec);    
             break;
         }
         case ChangeEvent::Op::Delete: {
-    	    std::fprintf(stderr, "[EmbeddingSink] delete\n");
-            if (!event.old_row) 
+            spdlog::debug("[PgEmbeddingSink] delete event received - {}", event.table_name);
+            if (!event.old_row) { 
+                spdlog::warn("[PgEmbeddingSink] delete event dropped, no old row received - {}", event.table_name);
                 return;
+            }
             const std::string id_val = get_column(*event.old_row, tm->id_source_);
-            if (!id_val.empty()) 
+            if (!id_val.empty()) { 
                 remove(*tm, id_val);
+            } else {
+                spdlog::warn("[PgEmbeddingSink] delete event dropped, no id val  - {}", event.table_name);
+            }
             break;
         }
     }
@@ -260,10 +284,11 @@ bool PgEmbeddingSink::upsert(const TableMapping& tm,
 
     bool ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
     if (!ok)
-        std::fprintf(stderr, "[PgEmbeddingSink] upsert failed id=%s: %s\n",
-                     id_value.c_str(), PQerrorMessage(pg_));
+        spdlog::error("[PgEmbeddingSink] upsert failed id={}: {}",
+                      id_value.c_str(), 
+                      PQerrorMessage(pg_));
     else
-        std::fprintf(stderr, "[PgEmbeddingSink] upserted id=%s\n", id_value.c_str());
+        spdlog::debug("[PgEmbeddingSink] upserted id={} - {}", id_value.c_str(), config_.sink_table);
     PQclear(res);
     return ok;
 }
@@ -276,8 +301,9 @@ bool PgEmbeddingSink::remove(const TableMapping& tm, const std::string& id_value
     PGresult* res = PQexecParams(pg_, sql.c_str(), 1, nullptr, params, nullptr, nullptr, 0);
     bool ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
     if (!ok)
-        std::fprintf(stderr, "[PgEmbeddingSink] delete failed id=%s: %s\n",
-                     id_value.c_str(), PQerrorMessage(pg_));
+        spdlog::error("[PgEmbeddingSink] delete failed id={}: {}",
+                      id_value.c_str(), 
+                      PQerrorMessage(pg_));
     PQclear(res);
     return ok;
 }

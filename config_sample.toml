@@ -3,6 +3,12 @@
 # walkrie config
 # Usage: ./walkrie /path/to/config.toml
 
+[app]
+log_level = "debug"   # trace / debug / info / warn / error / critical
+log_file  = "/tmp/logs/walkrie.log"
+log_max_size_mb  = 10
+log_max_files    = 5
+
 [[source]]
 host        = "localhost"
 port        = "5432"

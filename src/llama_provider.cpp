@@ -20,6 +20,18 @@ LlamaProvider::~LlamaProvider()
 
 void LlamaProvider::init() 
 {
+    // Redirect llama.cpp logging through spdlog
+    llama_log_set([](enum ggml_log_level level, const char* text, void*) {
+        std::string msg(text);
+        if (!msg.empty() && msg.back() == '\n') msg.pop_back();
+        if (msg.empty()) return;
+        switch (level) {
+            case GGML_LOG_LEVEL_WARN:  spdlog::warn ("[llama] {}", msg); break;
+            case GGML_LOG_LEVEL_ERROR: spdlog::error("[llama] {}", msg); break;
+            default:                   spdlog::debug("[llama] {}", msg); break;
+        }
+    }, nullptr);
+
     llama_backend_init();
 
     llama_model_params mparams = llama_model_default_params();
@@ -27,6 +39,8 @@ void LlamaProvider::init()
 
     model_ = llama_model_load_from_file(model_path_.c_str(), mparams);
     if (!model_) {
+        spdlog::error("[LlamaProvider] failed to load model from '" + model_path_ + "' _"
+                      "check that the path exists and is a valid GGUF file");
         throw std::runtime_error(
             "LlamaProvider: failed to load model from '" + model_path_ + "' — "
             "check that the path exists and is a valid GGUF file");
@@ -41,11 +55,11 @@ void LlamaProvider::init()
     if (!ctx_) {
         llama_model_free(model_);
         model_ = nullptr;
+        spdlog::error("[LlamaProvider] failed to create llama context");
         throw std::runtime_error("LlamaProvider: failed to create llama context");
     }
 
-    std::fprintf(stderr, "[LlamaProvider] loaded %s (%d dims)\n",
-                 model_path_.c_str(), dimensions());
+    spdlog::info("[LlamaProvider] loaded %s (%d dims)\n", model_path_.c_str(), dimensions());
 }
 
 std::vector<float> LlamaProvider::embed(const std::string& text) 
@@ -65,8 +79,7 @@ std::vector<float> LlamaProvider::embed(const std::string& text)
     );
 
     if (n_tokens < 0) {
-        std::fprintf(stderr, "[LlamaProvider] tokenize failed (text too long?): %.60s...\n",
-                     text.c_str());
+        spdlog::error("[LlamaProvider] tokenize failed (text too long?): %.60s...\n", text.c_str());
         return {};
     }
     tokens.resize(static_cast<size_t>(n_tokens));
@@ -76,7 +89,7 @@ std::vector<float> LlamaProvider::embed(const std::string& text)
 
     llama_batch batch = llama_batch_get_one(tokens.data(), n_tokens);
     if (llama_encode(ctx_, batch) != 0) {
-        std::fprintf(stderr, "[LlamaProvider] llama_encode failed\n");
+        spdlog::error("[LlamaProvider] llama_encode failed\n");
         return {};
     }
 
@@ -86,7 +99,7 @@ std::vector<float> LlamaProvider::embed(const std::string& text)
         embd = llama_get_embeddings_ith(ctx_, 0); // fallback
     }
     if (!embd) {
-        std::fprintf(stderr, "[LlamaProvider] llama_get_embeddings returned null — "
+        spdlog::error("[LlamaProvider] llama_get_embeddings returned null — "
                      "verify cparams.embeddings = true\n");
         return {};
     }

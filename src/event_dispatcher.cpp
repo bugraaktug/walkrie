@@ -1,6 +1,7 @@
 #include "event_dispatcher.hpp"
 
 #include <cstdio>
+#include <spdlog/spdlog.h>
 #include <sstream>
 
 namespace pgcdc
@@ -28,7 +29,7 @@ void EventDispatcher::process_jobs()
                 try {
                     sink->call(current_job.ev);
                 } catch (const std::exception& e) {
-                    std::fprintf(stderr, "sink error: %s\n", e.what());
+                    spdlog::error("[EventDispatcher] sink error: %s\n", e.what());
                     // continue to next sink — one bad sink doesn't kill the others
                 }
             }

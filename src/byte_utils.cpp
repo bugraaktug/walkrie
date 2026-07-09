@@ -8,7 +8,6 @@ namespace bytes
 // pgoutput integers are big-endian (network byte order). These helpers read
 // and advance a cursor pointer, so call sites stay readable as a sequence of
 // "read the next field" statements instead of manual offset arithmetic.
-
 uint8_t read_u8(const uint8_t*& p) 
 {
     return *p++;

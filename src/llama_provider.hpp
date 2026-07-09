@@ -1,6 +1,8 @@
 #pragma once
 
+#include <ggml.h>
 #include <llama.h>
+#include <spdlog/spdlog.h>  
 #include <string>
 #include <vector>
 

@@ -3,11 +3,20 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 #include <toml.hpp>
 
 namespace pgcdc 
 {
+
+struct AppSettings 
+{
+    std::string log_level        = "info";
+    std::string log_file         = "/tmp/logs/walkrie.log";
+    int         log_max_size_mb  = 10;
+    int         log_max_files    = 5;
+};
 
 struct SourceConfig 
 {
@@ -78,15 +87,29 @@ struct EmbeddingConfig
 
 struct AppConfig 
 {
-    std::vector<SourceConfig>    sources;
-    SinkConfig      sink;
-    EmbeddingConfig embedding;
+    AppSettings                 settings;
+    std::vector<SourceConfig>   sources;
+    SinkConfig                  sink;
+    EmbeddingConfig             embedding;
 
     std::vector<std::string> validate() const {
         std::vector<std::string> errors;
 
-	    if (sources.empty())
+        const std::vector<std::string> valid_levels = {
+            "trace",
+            "debug",
+            "info",
+            "warn",
+            "error",
+            "critical"
+        };
+        
+        if (std::find(valid_levels.begin(), valid_levels.end(), settings.log_level) == valid_levels.end()) {
+            errors.push_back("[app] log_level must be one of: trace, debug, info, warn, error, critical");
+        }
+	    if (sources.empty()) {
             errors.push_back("[source] at least one [[source]] block is required");
+        }
 
         for (size_t i = 0; i < sources.size(); ++i) {
             const auto& s = sources[i];
@@ -161,6 +184,13 @@ inline AppConfig load_config(const std::string& path)
         auto v = t->get_as<int64_t>(key);
         return v ? static_cast<int>(**v) : def;
     };
+
+    if (auto* a = tbl["app"].as_table()) {
+        cfg.settings.log_level       = str(a, "log_level",       cfg.settings.log_level);
+        cfg.settings.log_file        = str(a, "log_file",        cfg.settings.log_file);
+        cfg.settings.log_max_size_mb = i32(a, "log_max_size_mb", cfg.settings.log_max_size_mb);
+        cfg.settings.log_max_files   = i32(a, "log_max_files",   cfg.settings.log_max_files);
+    }
 
     if (auto* arr = tbl["source"].as_array()) {
         for (auto& elem : *arr) {
