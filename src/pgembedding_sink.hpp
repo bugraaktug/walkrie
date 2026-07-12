@@ -32,14 +32,16 @@ public:
  
     void init() override;
     void call(const ChangeEvent& event) override;
- 
+
+protected:
+    std::string build_upsert_sql(const TableMapping& tm);
+
 private:
     PgEmbeddingSinkConfig config_;
     std::shared_ptr<EmbeddingProvider> provider_; 
     std::unordered_map<std::string, std::string> upsert_sql_list_;
     PGconn* pg_ = nullptr;
 
-    std::string build_upsert_sql(const TableMapping& tm);
 
     bool upsert(const TableMapping& tm,
 		        const std::string& id_value,

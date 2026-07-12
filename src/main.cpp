@@ -15,7 +15,7 @@
 void init_logger(const pgcdc::AppSettings& settings) {
     try {
         spdlog::init_thread_pool(8192, 1);
-        auto async_file_logger = spdlog::create_async<spdlog::sinks::rotating_file_sink_mt>(
+        auto async_file_logger = spdlog::create_async<spdlog::sinks::rotating_file_sink_mt> (
             "walkrie",
             settings.log_file,
             static_cast<size_t>(settings.log_max_size_mb) * 1024 * 1024,

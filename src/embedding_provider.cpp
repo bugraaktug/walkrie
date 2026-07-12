@@ -25,4 +25,3 @@ std::shared_ptr<EmbeddingProvider> make_embedding_provider(const EmbeddingConfig
 }
 
 } // namespace pgcdc
-

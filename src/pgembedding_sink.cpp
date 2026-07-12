@@ -272,8 +272,9 @@ bool PgEmbeddingSink::upsert(const TableMapping& tm,
     std::vector<const char*> params;
     params.push_back(id_value.c_str());
     params.push_back(embed_text.c_str());
-    for (const auto& v : metadata_values)
+    for (const auto& v : metadata_values) {
         params.push_back(v.c_str());
+    }
     params.push_back(vec_literal.c_str());
 
     PGresult* res = PQexecParams(
@@ -283,12 +284,15 @@ bool PgEmbeddingSink::upsert(const TableMapping& tm,
         nullptr, params.data(), nullptr, nullptr, 0);
 
     bool ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
-    if (!ok)
+    if (!ok) {
         spdlog::error("[PgEmbeddingSink] upsert failed id={}: {}",
                       id_value.c_str(), 
                       PQerrorMessage(pg_));
-    else
-        spdlog::debug("[PgEmbeddingSink] upserted id={} - {}", id_value.c_str(), config_.sink_table);
+    } else {
+        spdlog::debug("[PgEmbeddingSink] upserted id={} - {}", 
+                      id_value.c_str(), 
+                      config_.sink_table);
+    }
     PQclear(res);
     return ok;
 }
@@ -300,10 +304,11 @@ bool PgEmbeddingSink::remove(const TableMapping& tm, const std::string& id_value
     const char* params[1] = { id_value.c_str() };
     PGresult* res = PQexecParams(pg_, sql.c_str(), 1, nullptr, params, nullptr, nullptr, 0);
     bool ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
-    if (!ok)
+    if (!ok) {
         spdlog::error("[PgEmbeddingSink] delete failed id={}: {}",
                       id_value.c_str(), 
                       PQerrorMessage(pg_));
+    }
     PQclear(res);
     return ok;
 }

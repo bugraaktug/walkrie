@@ -14,9 +14,9 @@ add_compile_options(-Wall -Wextra)
 find_program(PG_CONFIG pg_config)
 if(PG_CONFIG)
   execute_process(COMMAND ${PG_CONFIG} --includedir
-                   OUTPUT_VARIABLE PG_INCLUDE_DIR OUTPUT_STRIP_TRAILING_WHITESPACE)
+                  OUTPUT_VARIABLE PG_INCLUDE_DIR OUTPUT_STRIP_TRAILING_WHITESPACE)
   execute_process(COMMAND ${PG_CONFIG} --libdir
-                   OUTPUT_VARIABLE PG_LIB_DIR OUTPUT_STRIP_TRAILING_WHITESPACE)
+                  OUTPUT_VARIABLE PG_LIB_DIR OUTPUT_STRIP_TRAILING_WHITESPACE)
 else()
   message(WARNING "pg_config not found; falling back to system default paths (libpq-dev)")
   set(PG_INCLUDE_DIR "/usr/include/postgresql")
@@ -53,8 +53,8 @@ include_directories(${PG_INCLUDE_DIR}
 	    	   )
 link_directories(${PG_LIB_DIR} ${LIBEVENT_LIBRARY_DIRS})
 
-add_executable(walkrie
-    src/main.cpp
+# --- shared core library ---
+add_library(walkrie_core STATIC
     src/byte_utils.cpp
     src/event_dispatcher.cpp
     src/pgoutput_parser.cpp
@@ -64,13 +64,17 @@ add_executable(walkrie
     src/embedding_provider.cpp
     src/pgembedding_sink.cpp
 )
-
-target_include_directories(walkrie PRIVATE
+target_include_directories(walkrie_core PUBLIC
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src/include
+    ${CMAKE_SOURCE_DIR}/src/third_party
+    ${CMAKE_SOURCE_DIR}/src/queue
+    ${PG_INCLUDE_DIR}
+    ${LIBEVENT_INCLUDE_DIRS}
     ${LLAMA_DIR}/include
     ${LLAMA_DIR}/ggml/include
 )
-
-target_link_libraries(walkrie PRIVATE 
+target_link_libraries(walkrie_core PUBLIC
     pq
     ${LIBEVENT_LIBRARIES}
     nlohmann_json::nlohmann_json
@@ -79,24 +83,22 @@ target_link_libraries(walkrie PRIVATE
     ggml
 )
 
-# tests - seperate binary
-add_executable(
-    walkrie_tests
+# --- main binary ---
+add_executable(walkrie src/main.cpp)
+target_link_libraries(walkrie PRIVATE walkrie_core)
+
+# --- tests ---
+add_executable(walkrie_tests
     src/tests/test_main.cpp
     src/tests/test_config.cpp
+    src/tests/test_upsert_sql.cpp
 )
-
-target_include_directories(
-    walkrie_tests PRIVATE
-    src 
-    src/include 
+target_include_directories(walkrie_tests PRIVATE
+    src
+    src/include
     src/third_party
-    ${LLAMA_DIR}/include
-    ${LLAMA_DIR}/ggml/include
-    ${PG_INCLUDE_DIR}
 )
-
-target_link_libraries(walkrie_tests pq)
+target_link_libraries(walkrie_tests PRIVATE walkrie_core)
 
 enable_testing()
 add_test(NAME unit_tests COMMAND walkrie_tests)
