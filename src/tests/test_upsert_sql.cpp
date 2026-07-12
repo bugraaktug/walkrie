@@ -16,7 +16,8 @@
                       "ON CONFLICT (item_id) DO UPDATE SET item_body = EXCLUDED.item_body, "\
                       "category = EXCLUDED.category, embedding_column = EXCLUDED.embedding_column"
 
-namespace pgcdc {
+namespace pgcdc 
+{
 
 class TestEmbedSink : public pgcdc::PgEmbeddingSink
 {
@@ -55,9 +56,11 @@ public:
 };
 
 
-TEST_SUITE("build_upsert_sql") {
+TEST_SUITE("build_upsert_sql") 
+{
 
-    TEST_CASE("build_upsert() builds a valid sql") {
+    TEST_CASE("build_upsert() builds a valid sql") 
+    {
         pgcdc::PgEmbeddingSinkConfig sink_cfg;
         pgcdc::TableMapping tm;
         pgcdc::EmbeddingConfig embed_cfg;
@@ -88,7 +91,8 @@ TEST_SUITE("build_upsert_sql") {
         CHECK(sql == BUILD_SQL_ONE);
     }
 
-    TEST_CASE("build_upsert() with metadat columns builds a valid sql") {
+    TEST_CASE("build_upsert() with metadat columns builds a valid sql") 
+    {
         pgcdc::PgEmbeddingSinkConfig sink_cfg;
         pgcdc::TableMapping tm;
         pgcdc::EmbeddingConfig embed_cfg;

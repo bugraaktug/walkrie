@@ -39,6 +39,10 @@ public:
     bool register_event_loop(event_base* base, ChangeEventFn handle) override;
     std::string last_error() const override;
 
+protected:
+    void ping_update();
+    void drain_available_messages();
+
 private:
     PgReplicationConfig config_;
     PGconn* conn_ = nullptr;
@@ -53,9 +57,6 @@ private:
     event* timer_event_ = nullptr;
 
     void resume_slot();
-
-    void ping_update();
-    void drain_available_messages();
 
     static void on_read(evutil_socket_t fd, short events, void* arg);
     static void on_timer(evutil_socket_t fd, short events, void* arg);

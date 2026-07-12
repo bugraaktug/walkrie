@@ -1,9 +1,11 @@
 #include <doctest.h>
 #include "include/config.hpp"
 
-TEST_SUITE("validate_configuration") {
+TEST_SUITE("validate_configuration") 
+{
 
-    TEST_CASE("validate() catches missing dbname") {
+    TEST_CASE("validate() catches missing dbname") 
+    {
         pgcdc::AppConfig cfg;
         auto errors = cfg.validate();
         CHECK(errors.size() > 0);
@@ -14,7 +16,8 @@ TEST_SUITE("validate_configuration") {
         CHECK(found);
     }
 
-    TEST_CASE("validate() catches missing embed mapping") {
+    TEST_CASE("validate() catches missing embed mapping") 
+    {
         pgcdc::AppConfig cfg;
         cfg.sources.push_back({});
         cfg.sources[0].dbname = "qdb";
@@ -32,7 +35,8 @@ TEST_SUITE("validate_configuration") {
     }
 
 
-    TEST_CASE("validate() reports for wrong llm provider name") {
+    TEST_CASE("validate() reports for wrong llm provider name") 
+    {
         pgcdc::AppConfig cfg;
         cfg.embedding.provider = "invalid";
         cfg.embedding.model_path = "test_path";

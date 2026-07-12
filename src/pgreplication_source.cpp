@@ -1,4 +1,5 @@
 #include "pgreplication_source.hpp"
+#include "wal_frame.hpp"
 
 #include <sys/select.h>
 #include <event2/event.h>
@@ -212,35 +213,36 @@ void PgReplicationSource::drain_available_messages()
            }
            return;
        }
+       
        if (buf[0] == 'k') {
-           // Primary keepalive: walsender_lsn(8) + timestamp(8) + reply_requested(1)
-           uint8_t reply_requested = static_cast<uint8_t>(buf[16]);
-           if (reply_requested) {
+           auto keepalive = pgcdc::parse_keepalive_message(buf, static_cast<size_t>(copy_len));
+           if (!keepalive) {
+               spdlog::warn("[PgReplicationSource] [{}] truncated keepalive message",
+                            config_.slot_name.c_str());
+           } else if (keepalive->reply_requested) {
                ping_update();
                last_status_update_ = std::time(nullptr);
            }
        } else if (buf[0] == 'w') {
-           // XLogData: type(1) + start_lsn(8) + end_lsn(8) + send_time(8) + payload
-           const uint8_t* p = reinterpret_cast<const uint8_t*>(buf) + 1;
-           uint64_t wal_start = 0;
-           for (int i = 0; i < 8; ++i) wal_start = (wal_start << 8) | static_cast<uint8_t>(p[i]);
-           const uint8_t* payload = reinterpret_cast<const uint8_t*>(buf) + 1 + 24;
-           size_t payload_len = static_cast<size_t>(copy_len) - 1 - 24;
- 
-           try {
-               auto event = parser_.parse(payload, payload_len);
-               if (event) {
-                   event->commit_lsn = wal_start;
-                   handle_(*event);
-               }
-           } catch (const std::exception& e) {
-               spdlog::error("[PgReplicationSource] [{}] error decoding message at LSN {}: {} (skipping)",
-                             config_.slot_name.c_str(), 
-                             format_lsn(wal_start).c_str(), 
-                             e.what());
+           auto header = pgcdc::parse_xlogdata_header(buf, static_cast<size_t>(copy_len));
+           if (!header) {
+               spdlog::warn("[PgReplicationSource] [{}] truncated XLogData message",
+                            config_.slot_name.c_str());
+           } else {
+               try {
+                   auto event = parser_.parse(header->payload, header->payload_len);
+                   if (event) {
+                       event->commit_lsn = header->wal_start;
+                       handle_(*event);
+                   }
+                } catch (const std::exception& e) {
+                    spdlog::error("[PgReplicationSource] [{}] error decoding message at LSN {}: {} (skipping)",
+                            config_.slot_name.c_str(), 
+                            format_lsn(header->wal_start).c_str(), 
+                            e.what());
+                }
            }
- 
-           last_lsn_ = wal_start;
+           last_lsn_ = header->wal_start;
        }
        PQfreemem(buf);
    }

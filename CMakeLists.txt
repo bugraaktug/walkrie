@@ -56,6 +56,7 @@ link_directories(${PG_LIB_DIR} ${LIBEVENT_LIBRARY_DIRS})
 # --- shared core library ---
 add_library(walkrie_core STATIC
     src/byte_utils.cpp
+    src/wal_frame.cpp
     src/event_dispatcher.cpp
     src/pgoutput_parser.cpp
     src/pgreplication_source.cpp
@@ -92,6 +93,8 @@ add_executable(walkrie_tests
     src/tests/test_main.cpp
     src/tests/test_config.cpp
     src/tests/test_upsert_sql.cpp
+    src/tests/test_xframe_log.cpp
+    src/tests/test_parser.cpp
 )
 target_include_directories(walkrie_tests PRIVATE
     src
