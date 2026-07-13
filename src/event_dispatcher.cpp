@@ -23,19 +23,25 @@ void EventDispatcher::post_job(pgcdc::EventJob job)
 void EventDispatcher::process_jobs()
 {
     pgcdc::EventJob current_job;
-    while (running_.load(std::memory_order_acquire) || queue_.size_approx() > 0) {
-        if (queue_.try_dequeue(current_job)) {
-	    for (auto& sink : current_job.sinks) {
+    while (running_.load(std::memory_order_acquire)) {
+        if (queue_.wait_dequeue_timed(current_job, std::chrono::milliseconds(200))) {
+            for (auto& sink : current_job.sinks) {
                 try {
                     sink->call(current_job.ev);
                 } catch (const std::exception& e) {
-                    spdlog::error("[EventDispatcher] sink error: %s\n", e.what());
-                    // continue to next sink — one bad sink doesn't kill the others
+                    spdlog::error("[EventDispatcher] sink error: {}", e.what());
                 }
             }
-	}
-	else {
-            std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
+    }
+    // drain any remaining queued jobs before the thread exits
+    while (queue_.try_dequeue(current_job)) {
+        for (auto& sink : current_job.sinks) {
+            try {
+                sink->call(current_job.ev);
+            } catch (const std::exception& e) {
+                spdlog::error("[EventDispatcher] sink error: {}", e.what());
+            }
         }
     }
 }

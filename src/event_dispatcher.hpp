@@ -27,7 +27,7 @@ public:
         worker_thread_ = std::thread(&EventDispatcher::process_jobs, this);
     }
     
-    ~EventDispatcher() ;
+    ~EventDispatcher();
     EventDispatcher(const EventDispatcher&) = delete;
     EventDispatcher& operator=(const EventDispatcher&) = delete;
     
@@ -36,7 +36,7 @@ public:
 private:
     void process_jobs(); 
     
-    moodycamel::ReaderWriterQueue<EventJob> queue_;
+    moodycamel::BlockingReaderWriterQueue<EventJob> queue_;
     std::thread worker_thread_;
     std::atomic<bool> running_;
 };
