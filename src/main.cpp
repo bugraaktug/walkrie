@@ -7,10 +7,11 @@
 #include <spdlog/sinks/rotating_file_sink.h>
 
 #include "config.hpp"
-#include "readerwriterqueue.hpp"
 #include "event_dispatcher.hpp"
+#include "http_client.hpp"
 #include "pgembedding_sink.hpp"
 #include "pgreplication_source.hpp"
+#include "readerwriterqueue.hpp"
 
 void init_logger(const pgcdc::AppSettings& settings) {
     try {
@@ -103,6 +104,7 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    pgcdc::http_global_init();
     event_base* base = event_base_new();
     if (!base) {
         spdlog::error("[Dispatcher] event_base_new() failed to initialize...");
@@ -172,6 +174,7 @@ int main(int argc, char** argv)
 
     event_base_free(base);
     
+    pgcdc::http_global_cleanup();
     spdlog::shutdown();
     
     spdlog::info("Walkrie system shutting down...");

@@ -78,6 +78,7 @@ struct SinkConfig
 struct EmbeddingConfig 
 {
     std::string provider    = "llama";   // "llama" or "openai" (openai = future stub)
+    std::string model;			         // required for openai; ignored for llama
     std::string model_path;              // required for llama; ignored for openai
     std::string api_key;                 // required for openai; ignored for llama
     int         dimensions   = 1024;     // must match model output + pgvector column
@@ -136,18 +137,36 @@ struct AppConfig
         if (embedding.provider != "llama" && embedding.provider != "openai") {
             errors.push_back("[embedding] provider must be 'llama' or 'openai'");
         }
-        if (embedding.provider == "llama" && embedding.model_path.empty()) {
-            errors.push_back("[embedding] model_path is required when provider = 'llama'");
+        if (embedding.provider == "llama") {
+            if (embedding.model_path.empty()) {
+                errors.push_back("[embedding] model_path is required when provider = 'llama'");
+            }
+	        if (embedding.dimensions <= 0) {
+                errors.push_back("[embedding] dimensions must be > 0");
+            }
         }
-        if (embedding.provider == "openai" && embedding.api_key.empty()) {
-            errors.push_back("[embedding] api_key is required when provider = 'openai'");
-        }
-	    if (embedding.dimensions <= 0) {
-            errors.push_back("[embedding] dimensions must be > 0");
-        }
-        if (sink.table_mappings.empty())
-            errors.push_back("[sink] at least one [[sink.table_mapping]] block is required");
+        if (embedding.provider == "openai") {
+            if (embedding.api_key.empty()) {
+                errors.push_back("[embedding] api_key is required when provider = 'openai'");
+            }
+            if (embedding.model.empty()) {
+                errors.push_back("[embedding] model is required when provider = 'openai'");
+            }
+            // text-embedding-3-* models support truncating to a smaller `dimensions`
+            if (embedding.model == "text-embedding-3-small" && embedding.dimensions > 1536) {
+                errors.push_back("[embedding] dimensions must be <= 1536 for text-embedding-3-small");
+            }
+            if (embedding.model == "text-embedding-3-large" && embedding.dimensions > 3072) {
+                errors.push_back("[embedding] dimensions must be <= 3072 for text-embedding-3-large");
+            }
+            if (embedding.model == "text-embedding-ada-002" && embedding.dimensions != 1536) {
+                errors.push_back("[embedding] text-embedding-ada-002 does not support dimension truncation — dimensions must be exactly 1536");
+            }
+        }   
 
+        if (sink.table_mappings.empty()) {
+            errors.push_back("[sink] at least one [[sink.table_mapping]] block is required");
+        }
         for (const auto& tm : sink.table_mappings) {
             if (tm.source_table.empty())
                 errors.push_back("[sink.table_mapping] source_table is required");
@@ -244,6 +263,7 @@ inline AppConfig load_config(const std::string& path)
 
     if (auto* e = tbl["embedding"].as_table()) {
         cfg.embedding.provider    = str(e, "provider",     cfg.embedding.provider);
+        cfg.embedding.model       = str(e, "model",        cfg.embedding.model);
         cfg.embedding.model_path  = str(e, "model_path",   cfg.embedding.model_path);
         cfg.embedding.api_key     = str(e, "api_key",      cfg.embedding.api_key);
         cfg.embedding.dimensions  = i32(e, "dimensions",   cfg.embedding.dimensions);

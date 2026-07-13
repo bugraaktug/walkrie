@@ -27,6 +27,7 @@ endif()
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(PkgConfig REQUIRED)
+find_package(CURL REQUIRED)
 pkg_check_modules(LIBEVENT REQUIRED libevent)
 
 
@@ -58,6 +59,7 @@ add_library(walkrie_core STATIC
     src/byte_utils.cpp
     src/wal_frame.cpp
     src/event_dispatcher.cpp
+    src/http_client.cpp
     src/pgoutput_parser.cpp
     src/pgreplication_source.cpp
     src/llama_provider.cpp
@@ -80,6 +82,7 @@ target_link_libraries(walkrie_core PUBLIC
     ${LIBEVENT_LIBRARIES}
     nlohmann_json::nlohmann_json
     spdlog::spdlog_header_only
+    CURL::libcurl
     llama
     ggml
 )
