@@ -190,7 +190,7 @@ n_ctx      = 512
 
 ```
 
-**Note on `discriminator_column`:** this column is used  as the sources might use the same ids, thus, should also exists in a real unique constraint on the sink table.Otherwise, the generated SQL will use ON CONFLICT (item_id) and others ON CONFLICT (item_id, category), and Postgres will throw "no unique or exclusion constraint matching" for whichever ones don't match your actual table's constraint.
+**Note on `discriminator_column`:** this is needed when multiple source tables share a sink table and may use overlapping id values. The discriminator column must also exist as part of a real unique constraint on the sink table — otherwise different mappings will generate mismatched ON CONFLICT targets (e.g. some as (item_id), others as (item_id, category)), and Postgres will reject whichever ones don't match the actual constraint on the table.
 
 To use OpenAI instead of a local model, replace the `[embedding]` block:
 

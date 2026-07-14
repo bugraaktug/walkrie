@@ -20,7 +20,7 @@ Most CDC-to-vector pipelines today are built from general-purpose tools (Debeziu
 ## MVP Feature Set
 
 * **Real-time WAL streaming** via native logical replication slot listener.
-* **Multi-table mapping** — configure multiple source tables, each with independent column mappings, in a single config file.
+* **Multi-table mapping** — configure multiple source tables, each with independent column mappings, in a single config file. Multiple sources can share one sink table using a static discriminator label, so overlapping IDs across tables never collide.
 * **OpenAI & local Llama integrations** — switch embedding provider via a single config field.
 * **Upsert-based sink writes** — idempotent by design; replays and reconnects don't duplicate rows.
 
