@@ -16,6 +16,11 @@
                       "ON CONFLICT (item_id) DO UPDATE SET item_body = EXCLUDED.item_body, "\
                       "category = EXCLUDED.category, embedding_column = EXCLUDED.embedding_column"
 
+#define BUILD_SQL_DISCRIMINATOR "INSERT INTO test_embeddings " \
+                      "(item_id, category, item_body, embedding_column) VALUES ($1, $2, $3, $4::vector) "\
+                      "ON CONFLICT (item_id, category) DO UPDATE SET item_body = EXCLUDED.item_body, "\
+                      "embedding_column = EXCLUDED.embedding_column"
+
 namespace pgcdc 
 {
 
@@ -122,4 +127,31 @@ TEST_SUITE("build_upsert_sql")
         CHECK(sql == BUILD_SQL_TWO);
     }
 
+    TEST_CASE("build_upsert() with imultiple sources and static discriminator builds a valid sql") 
+    {
+        pgcdc::PgEmbeddingSinkConfig sink_cfg;
+        pgcdc::TableMapping tm;
+        pgcdc::EmbeddingConfig embed_cfg;
+
+        std::shared_ptr<pgcdc::EmbeddingProvider> provider = std::make_shared<TestEmbedProvider>(embed_cfg);
+        provider->init();
+
+        tm.source_table = "test_table";
+        tm.id_source_ = "id";
+        tm.id_sink_ = "item_id";
+        tm.embed_source_ = "body";
+        tm.embed_sink_ = "item_body";
+        tm.has_discriminator_ = true;
+        tm.discriminator_sink_ = "category";
+        tm.discriminator_label_ = "test_table";
+
+        sink_cfg.pg_conninfo = "host=localhost port=5432 dbname=postgres user=test password=test";
+        sink_cfg.sink_table  = "test_embeddings";
+        sink_cfg.sink_column = "embedding_column";
+        sink_cfg.mappings.push_back(tm);
+
+        pgcdc::TestEmbedSink sink(sink_cfg, provider);
+        std::string sql = sink.build_upsert_sql_public(tm);
+        CHECK(sql == BUILD_SQL_DISCRIMINATOR); // same SQL string as before
+    }
 }

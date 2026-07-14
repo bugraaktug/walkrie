@@ -114,6 +114,84 @@ n_threads  = 4
 n_ctx      = 512
 ```
 
+To use multiple sources and collect the embeddings in same sink table, usei discriminator column and labels within the config:
+
+```toml
+[app]
+log_level = "debug"   # trace / debug / info / warn / error / critical
+log_file  = "/tmp/logs/walkrie.log"
+log_max_size_mb  = 10
+log_max_files    = 5
+
+[[source]]
+host        = "localhost"
+port        = "5432"
+dbname      = "qdb"
+user        = "quser"
+password    = "quser1234"
+slot_name   = "cdc_slot"
+publication = "test_pub"
+
+[[source]]
+host        = "localhost"
+port        = "5432"
+dbname      = "qdb"
+user        = "quser"
+password    = "quser1234"
+slot_name   = "pgcdc_slot"
+publication = "pgcdc_pub"
+
+[sink]
+host            = "localhost"
+port            = "5432"
+dbname          = "qdb"
+user            = "quser"
+password        = "quser1234"
+table           = "public.test_embeddings_msource"
+embed_column    = "embedding"
+
+ [[sink.table_mapping]]
+ source_table = "test_table"
+ discriminator_column = "category"
+ discriminator_label  = "test"
+ 
+    [[sink.table_mapping.columns]]
+    source_column = "id"
+    sink_column   = "item_id"
+    role          = "id"
+
+    [[sink.table_mapping.columns]]
+    source_column = "name"
+    sink_column   = "item_name"
+    role          = "embed"
+
+ [[sink.table_mapping]]
+ source_table = "documents"
+ discriminator_column = "category"
+ discriminator_label  = "documents"
+
+    [[sink.table_mapping.columns]]
+    source_column = "id"
+    sink_column   = "item_id"
+    role          = "id"
+
+    [[sink.table_mapping.columns]]
+    source_column = "body"
+    sink_column   = "item_name"
+    role          = "embed"
+
+[embedding]
+provider   = "llama"
+model_path = "/home/debian/models/bge-m3/bge-m3-Q4_K_M.gguf"
+api_key    = ""
+dimensions = 1024
+n_threads  = 4
+n_ctx      = 512
+
+```
+
+**Note on `discriminator_column`:** this column is used  as the sources might use the same ids, thus, should also exists in a real unique constraint on the sink table.Otherwise, the generated SQL will use ON CONFLICT (item_id) and others ON CONFLICT (item_id, category), and Postgres will throw "no unique or exclusion constraint matching" for whichever ones don't match your actual table's constraint.
+
 To use OpenAI instead of a local model, replace the `[embedding]` block:
 
 ```toml

@@ -50,6 +50,11 @@ struct TableMapping
     std::string embed_source_;
     std::string embed_sink_;
 
+    bool has_discriminator_ = false;
+    std::string discriminator_sink_;   // sink column name, e.g. "category"
+    std::string discriminator_label_;  // fixed value for every row from this mapping
+
+
     void resolve_columns() {
         for (const auto& m : columns) {
             if (m.role == "id") {
@@ -168,12 +173,19 @@ struct AppConfig
             errors.push_back("[sink] at least one [[sink.table_mapping]] block is required");
         }
         for (const auto& tm : sink.table_mappings) {
-            if (tm.source_table.empty())
+            if (tm.source_table.empty()) {
                 errors.push_back("[sink.table_mapping] source_table is required");
-            if (tm.id_source_.empty())
+            }
+            if (tm.id_source_.empty()) {
                 errors.push_back("[sink.table_mapping:" + tm.source_table + "] needs a mapping with role='id'");
-            if (tm.embed_source_.empty())
+            }
+            if (tm.embed_source_.empty()) {
                 errors.push_back("[sink.table_mapping:" + tm.source_table + "] needs a mapping with role='embed'");
+            }
+            if (tm.has_discriminator_ && tm.discriminator_label_.empty()) {
+                errors.push_back("[sink.table_mapping:" + tm.source_table +
+                                 "] discriminator_column is set but discriminator_label is empty");
+            }
         }
         return errors;
     }
@@ -239,6 +251,14 @@ inline AppConfig load_config(const std::string& path)
                 TableMapping tm;
                 if (auto* t = tm_elem.as_table()) {
                     tm.source_table = str(t, "source_table", "");
+                    std::string disc_col = str(t, "discriminator_column", "");
+                    std::string disc_lbl = str(t, "discriminator_label", "");
+                    if (!disc_col.empty()) {
+                        tm.has_discriminator_  = true;
+                        tm.discriminator_sink_  = disc_col;
+                        tm.discriminator_label_ = disc_lbl;
+                    }
+
                     if (auto* col_arr = (*t)["columns"].as_array()) {
                         for (auto& col_elem : *col_arr) {
                             ColumnMapping m;
@@ -253,8 +273,9 @@ inline AppConfig load_config(const std::string& path)
                     }
                     tm.resolve_columns();
                 }
-                if (!tm.source_table.empty())
+                if (!tm.source_table.empty()) {
                     cfg.sink.table_mappings.push_back(tm);
+                }
             }
         }
         cfg.sink.embedding_column = str(s, "embed_column",    cfg.sink.embedding_column);

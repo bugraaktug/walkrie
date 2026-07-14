@@ -18,18 +18,29 @@ password    = "quser1234"
 slot_name   = "cdc_slot"
 publication = "test_pub"
 
+[[source]]
+host        = "localhost"
+port        = "5432"
+dbname      = "qdb"
+user        = "quser"
+password    = "quser1234"
+slot_name   = "pgcdc_slot"
+publication = "pgcdc_pub"
+
 [sink]
 host     	= "localhost"
 port     	= "5432"
 dbname   	= "qdb"
 user     	= "quser"
 password 	= "quser1234"
-table    	= "public.test_embeddings"
+table    	= "public.test_embeddings_msource"
 embed_column 	= "embedding"
 
  [[sink.table_mapping]]
  source_table = "test_table"
-
+ discriminator_column = "category"
+ discriminator_label  = "test"
+ 
     [[sink.table_mapping.columns]]
     source_column = "id"
     sink_column   = "item_id"
@@ -37,6 +48,21 @@ embed_column 	= "embedding"
 
     [[sink.table_mapping.columns]]
     source_column = "name"
+    sink_column   = "item_name"
+    role          = "embed"
+
+ [[sink.table_mapping]]
+ source_table = "documents"
+ discriminator_column = "category"
+ discriminator_label  = "documents"
+
+    [[sink.table_mapping.columns]]
+    source_column = "id"
+    sink_column   = "item_id"
+    role          = "id"
+
+    [[sink.table_mapping.columns]]
+    source_column = "body"
     sink_column   = "item_name"
     role          = "embed"
 

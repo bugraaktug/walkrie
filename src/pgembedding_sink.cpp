@@ -57,18 +57,17 @@ void PgEmbeddingSink::init()
 std::string PgEmbeddingSink::build_upsert_sql(const TableMapping& tm)
 {
     // Build:
-    //   INSERT INTO <table> (id_col, embed_col_1, ..., metadata_col_n, embedding)
-    //   VALUES ($1, $2, ..., $n, $n+1::vector)
-    //   ON CONFLICT (id_col) DO UPDATE SET
+    //   INSERT INTO <table> (id_col, /disc_col?/, embed_col_1, ..., metadata_col_n, embedding)
+    //   VALUES ($1, /$2?/, $3,..., $n, $n+1::vector)
+    //   ON CONFLICT (id_col, /disc_col?/) DO UPDATE SET
     //       embed_col_1 = EXCLUDED.embed_col_1, ..., embedding = EXCLUDED.embedding
     //
-    // Parameter numbering:
-    //   $1            = id value
-    //   $2            = embed text (stored as metadata too, if mapped)
-    //   $3..$n        = additional metadata values
-    //   $n+1          = vector literal
 
-    // Collect columns in a stable order: id first, then embed, then metadata
+    // Collect columns in a stable order: 
+    // - id first, 
+    // - discriminator label(if configured), 
+    // - embed, 
+    // - metadata
     // We always store the embed text as a sink column too (its sink_column in the mapping)
     // and then any additional metadata columns after that.
 
@@ -77,11 +76,14 @@ std::string PgEmbeddingSink::build_upsert_sql(const TableMapping& tm)
 
     // $1 = id
     sink_cols.push_back(tm.id_sink_);
-    // $2 = embed text — use cached member, no re-scan
+    // $2 = discriminator, only if configured;
+    if (tm.has_discriminator_) {
+        sink_cols.push_back(tm.discriminator_sink_);
+    }
+
     sink_cols.push_back(tm.embed_sink_);
     update_cols.push_back(tm.embed_sink_);
 
-    // $3..$n = metadata columns
     for (const auto& m : tm.columns) {
         if (m.role == "metadata") {
             sink_cols.push_back(m.sink_column);
@@ -116,8 +118,11 @@ std::string PgEmbeddingSink::build_upsert_sql(const TableMapping& tm)
     sql << "INSERT INTO " << config_.sink_table
         << " (" << col_list.str() << ")"
         << " VALUES (" << val_list.str() << ")"
-        << " ON CONFLICT (" << tm.id_sink_ << ")"
-        << " DO UPDATE SET " << update_list.str();
+        << " ON CONFLICT (" << tm.id_sink_;
+    if (tm.has_discriminator_) {
+        sql << ", " << tm.discriminator_sink_;
+    }
+    sql << ") DO UPDATE SET " << update_list.str();
 
     return sql.str();
 }
@@ -271,6 +276,9 @@ bool PgEmbeddingSink::upsert(const TableMapping& tm,
      // Params: id, embed_text, metadata..., vector
     std::vector<const char*> params;
     params.push_back(id_value.c_str());
+    if (tm.has_discriminator_) {
+        params.push_back(tm.discriminator_label_.c_str());
+    }
     params.push_back(embed_text.c_str());
     for (const auto& v : metadata_values) {
         params.push_back(v.c_str());
@@ -299,10 +307,20 @@ bool PgEmbeddingSink::upsert(const TableMapping& tm,
 
 bool PgEmbeddingSink::remove(const TableMapping& tm, const std::string& id_value)
 {
-    std::string sql = "DELETE FROM " + config_.sink_table +
-                      " WHERE " + tm.id_sink_ + " = $1";
-    const char* params[1] = { id_value.c_str() };
-    PGresult* res = PQexecParams(pg_, sql.c_str(), 1, nullptr, params, nullptr, nullptr, 0);
+    std::ostringstream sql;
+    sql << "DELETE FROM " << config_.sink_table << " WHERE " << tm.id_sink_ << " = $1";
+
+    std::vector<const char*> params = { id_value.c_str() };
+    if (tm.has_discriminator_) {
+        sql << " AND " << tm.discriminator_sink_ << " = $2";
+        params.push_back(tm.discriminator_label_.c_str());
+    }
+
+    PGresult* res = PQexecParams(
+            pg_, 
+            sql.str().c_str(), 
+            static_cast<int>(params.size()),
+            nullptr, params.data(), nullptr, nullptr, 0);
     bool ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
     if (!ok) {
         spdlog::error("[PgEmbeddingSink] delete failed id={}: {}",
