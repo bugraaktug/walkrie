@@ -1,4 +1,5 @@
 #include "pgembedding_sink.hpp"
+#include "pg_sql_builder.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -10,7 +11,7 @@ namespace pgcdc
 {
 
 PgEmbeddingSink::PgEmbeddingSink(PgEmbeddingSinkConfig config,
-                                  std::shared_ptr<EmbeddingProvider> provider)
+                                 std::shared_ptr<EmbeddingProvider> provider)
     : config_(std::move(config))
     , provider_(std::move(provider)) {}
 
@@ -24,9 +25,15 @@ PgEmbeddingSink::~PgEmbeddingSink()
 
 void PgEmbeddingSink::init() 
 {
+    sql_builder_ = std::make_unique<PgSqlBuilder>(config_.sink_table, config_.sink_column);
+
     for (const auto& tm : config_.mappings) {
-        upsert_sql_list_[tm.source_table] = build_upsert_sql(tm);
-        spdlog::debug("[PgEmbeddingSink] upsert sql for mapping {} ready - {} ", tm.source_table, upsert_sql_list_[tm.source_table]); 
+        upsert_sql_list_[tm.source_table] = sql_builder_->build_upsert_sql(tm);
+        spdlog::debug("[PgEmbeddingSink] upsert sql for mapping {} ready - {}",
+                      tm.source_table, upsert_sql_list_[tm.source_table]);
+        delete_sql_list_[tm.source_table] = sql_builder_->build_delete_sql(tm);
+        spdlog::debug("[PgEmbeddingSink] delete sql for mapping {} ready - {}",
+                      tm.source_table, delete_sql_list_[tm.source_table]);
     }
 
     // --- pgvector sink connection ---
@@ -51,80 +58,6 @@ void PgEmbeddingSink::init()
     }
 
     spdlog::info("[PgEmbeddingSink] pg connection ok, pgvector present for {} table", config_.sink_table);
-}
-
-
-std::string PgEmbeddingSink::build_upsert_sql(const TableMapping& tm)
-{
-    // Build:
-    //   INSERT INTO <table> (id_col, /disc_col?/, embed_col_1, ..., metadata_col_n, embedding)
-    //   VALUES ($1, /$2?/, $3,..., $n, $n+1::vector)
-    //   ON CONFLICT (id_col, /disc_col?/) DO UPDATE SET
-    //       embed_col_1 = EXCLUDED.embed_col_1, ..., embedding = EXCLUDED.embedding
-    //
-
-    // Collect columns in a stable order: 
-    // - id first, 
-    // - discriminator label(if configured), 
-    // - embed, 
-    // - metadata
-    // We always store the embed text as a sink column too (its sink_column in the mapping)
-    // and then any additional metadata columns after that.
-
-    std::vector<std::string> sink_cols;   // column names for INSERT
-    std::vector<std::string> update_cols; // for the DO UPDATE SET clause (excludes id)
-
-    // $1 = id
-    sink_cols.push_back(tm.id_sink_);
-    // $2 = discriminator, only if configured;
-    if (tm.has_discriminator_) {
-        sink_cols.push_back(tm.discriminator_sink_);
-    }
-
-    sink_cols.push_back(tm.embed_sink_);
-    update_cols.push_back(tm.embed_sink_);
-
-    for (const auto& m : tm.columns) {
-        if (m.role == "metadata") {
-            sink_cols.push_back(m.sink_column);
-            update_cols.push_back(m.sink_column);
-        }
-    }
-
-    // last param = embedding vector
-    sink_cols.push_back(config_.sink_column);
-    update_cols.push_back(config_.sink_column);
-
-    // Build column list
-    std::ostringstream col_list, val_list, update_list;
-    for (size_t i = 0; i < sink_cols.size(); ++i) {
-        if (i > 0) { 
-            col_list << ", "; val_list << ", "; 
-        }
-        col_list << sink_cols[i];
-        if (sink_cols[i] == config_.sink_column) {
-            val_list << "$" << (i + 1) << "::vector";
-        } else {
-            val_list << "$" << (i + 1);
-        }
-    }
-    for (size_t i = 0; i < update_cols.size(); ++i) {
-        if (i > 0) 
-            update_list << ", ";
-        update_list << update_cols[i] << " = EXCLUDED." << update_cols[i];
-    }
-
-    std::ostringstream sql;
-    sql << "INSERT INTO " << config_.sink_table
-        << " (" << col_list.str() << ")"
-        << " VALUES (" << val_list.str() << ")"
-        << " ON CONFLICT (" << tm.id_sink_;
-    if (tm.has_discriminator_) {
-        sql << ", " << tm.discriminator_sink_;
-    }
-    sql << ") DO UPDATE SET " << update_list.str();
-
-    return sql.str();
 }
 
 void PgEmbeddingSink::call(const ChangeEvent& event) {
@@ -262,18 +195,16 @@ bool PgEmbeddingSink::upsert(const TableMapping& tm,
                              const std::vector<float>& embedding)
 {
     const std::string& upsert_sql = upsert_sql_list_.at(tm.source_table);
-    
+
     std::ostringstream vec_str;
     vec_str << "[";
     for (size_t i = 0; i < embedding.size(); ++i) {
-        if (i > 0) 
-            vec_str << ",";
+        if (i > 0) vec_str << ",";
         vec_str << embedding[i];
     }
     vec_str << "]";
-
     const std::string vec_literal = vec_str.str();
-     // Params: id, embed_text, metadata..., vector
+
     std::vector<const char*> params;
     params.push_back(id_value.c_str());
     if (tm.has_discriminator_) {
@@ -286,20 +217,16 @@ bool PgEmbeddingSink::upsert(const TableMapping& tm,
     params.push_back(vec_literal.c_str());
 
     PGresult* res = PQexecParams(
-        pg_,
-        upsert_sql.c_str(),
-        static_cast<int>(params.size()),
+        pg_, upsert_sql.c_str(), static_cast<int>(params.size()),
         nullptr, params.data(), nullptr, nullptr, 0);
 
     bool ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
     if (!ok) {
-        spdlog::error("[PgEmbeddingSink] upsert failed id={}: {}",
-                      id_value.c_str(), 
-                      PQerrorMessage(pg_));
+        spdlog::error("[PgEmbeddingSink] upsert failed id={} table={}: {}",
+                      id_value, tm.source_table, PQerrorMessage(pg_));
     } else {
-        spdlog::debug("[PgEmbeddingSink] upserted id={} - {}", 
-                      id_value.c_str(), 
-                      config_.sink_table);
+        spdlog::debug("[PgEmbeddingSink] upserted id={} table={} - {}",
+                      id_value, tm.source_table, config_.sink_table);
     }
     PQclear(res);
     return ok;
@@ -307,25 +234,19 @@ bool PgEmbeddingSink::upsert(const TableMapping& tm,
 
 bool PgEmbeddingSink::remove(const TableMapping& tm, const std::string& id_value)
 {
-    std::ostringstream sql;
-    sql << "DELETE FROM " << config_.sink_table << " WHERE " << tm.id_sink_ << " = $1";
+    const std::string& sql = delete_sql_list_.at(tm.source_table);
 
     std::vector<const char*> params = { id_value.c_str() };
     if (tm.has_discriminator_) {
-        sql << " AND " << tm.discriminator_sink_ << " = $2";
         params.push_back(tm.discriminator_label_.c_str());
     }
 
-    PGresult* res = PQexecParams(
-            pg_, 
-            sql.str().c_str(), 
-            static_cast<int>(params.size()),
-            nullptr, params.data(), nullptr, nullptr, 0);
+    PGresult* res = PQexecParams(pg_, sql.c_str(), static_cast<int>(params.size()),
+                                  nullptr, params.data(), nullptr, nullptr, 0);
     bool ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
     if (!ok) {
-        spdlog::error("[PgEmbeddingSink] delete failed id={}: {}",
-                      id_value.c_str(), 
-                      PQerrorMessage(pg_));
+        spdlog::error("[PgEmbeddingSink] delete failed id={} table={}: {}",
+                      id_value, tm.source_table, PQerrorMessage(pg_));
     }
     PQclear(res);
     return ok;

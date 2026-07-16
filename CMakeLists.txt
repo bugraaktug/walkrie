@@ -60,6 +60,7 @@ add_library(walkrie_core STATIC
     src/wal_frame.cpp
     src/event_dispatcher.cpp
     src/http_client.cpp
+    src/pg_sql_builder.cpp
     src/pgoutput_parser.cpp
     src/pgreplication_source.cpp
     src/llama_provider.cpp

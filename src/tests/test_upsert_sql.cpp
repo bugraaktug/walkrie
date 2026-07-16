@@ -3,155 +3,97 @@
 #include <vector>
 
 #include "include/config.hpp"
-#include "embedding_provider.hpp"
-#include "pgembedding_sink.hpp"
+#include "pg_sql_builder.hpp"
 
-#define BUILD_SQL_ONE "INSERT INTO test_embeddings " \
-                      "(item_id, item_body, embedding_column) VALUES ($1, $2, $3::vector) "\
-                      "ON CONFLICT (item_id) DO UPDATE SET item_body = EXCLUDED.item_body, "\
-                      "embedding_column = EXCLUDED.embedding_column"
-
-#define BUILD_SQL_TWO "INSERT INTO test_embeddings "\
-                      "(item_id, item_body, category, embedding_column) VALUES ($1, $2, $3, $4::vector) "\
-                      "ON CONFLICT (item_id) DO UPDATE SET item_body = EXCLUDED.item_body, "\
-                      "category = EXCLUDED.category, embedding_column = EXCLUDED.embedding_column"
-
-#define BUILD_SQL_DISCRIMINATOR "INSERT INTO test_embeddings " \
-                      "(item_id, category, item_body, embedding_column) VALUES ($1, $2, $3, $4::vector) "\
-                      "ON CONFLICT (item_id, category) DO UPDATE SET item_body = EXCLUDED.item_body, "\
-                      "embedding_column = EXCLUDED.embedding_column"
-
-namespace pgcdc 
+namespace 
 {
 
-class TestEmbedSink : public pgcdc::PgEmbeddingSink
-{
-public:
-    using PgEmbeddingSink::PgEmbeddingSink;  // inherit constructor
-
-    std::string build_upsert_sql_public(const TableMapping& tm) {
-        return build_upsert_sql(tm);
-    }
-};
-
+pgcdc::TableMapping make_basic_mapping() {
+    pgcdc::TableMapping tm;
+    tm.source_table = "test_table";
+    tm.id_source_ = "id";
+    tm.id_sink_ = "item_id";
+    tm.embed_source_ = "body";
+    tm.embed_sink_ = "item_body";
+    return tm;
 }
 
-struct EmbeddingConfig; 
+} // namespace
 
-class TestEmbedProvider : public pgcdc::EmbeddingProvider 
-{
-public:
-    TestEmbedProvider(const pgcdc::EmbeddingConfig& /*cfg*/) {}
-    ~TestEmbedProvider() {}
-
-    void init() {
-    }
-    
-    std::vector<float> embed(const std::string& /*text*/) {
-        return {};
-    }
-
-    int dimensions() const {
-        return 1024;
-    }
-
-    std::string name() const {
-        return "test_embed_model";
-    }
-};
-
-
-TEST_SUITE("build_upsert_sql") 
+TEST_SUITE("PgSqlBuilder") 
 {
 
-    TEST_CASE("build_upsert() builds a valid sql") 
+    TEST_CASE("build_upsert_sql produces a valid statement, no metadata/discriminator") 
     {
-        pgcdc::PgEmbeddingSinkConfig sink_cfg;
-        pgcdc::TableMapping tm;
-        pgcdc::EmbeddingConfig embed_cfg;
-        
-        std::shared_ptr<pgcdc::EmbeddingProvider> provider = std::make_shared<TestEmbedProvider>(embed_cfg);
-        provider->init();
-       
-        tm.id_source_ = "id";
-        tm.id_sink_ ="item_id";
-        tm.embed_source_ = "body";
-        tm.embed_sink_ = "item_body";
-        
-        std::ostringstream conn;
-        conn << "host="     << "localhost"
-             << " port="    << "5432"
-             << " dbname="  << "postgres"
-             << " user="    << "test"
-             << " password=" << "test";
-        
-        sink_cfg.pg_conninfo = conn.str();
-        sink_cfg.sink_table  = "test_embeddings";
-        sink_cfg.sink_column = "embedding_column";
-        sink_cfg.mappings.push_back(tm);
-        
-        pgcdc::TestEmbedSink sink(sink_cfg, provider);
-        std::string sql = sink.build_upsert_sql_public(tm);
+        pgcdc::PgSqlBuilder builder("test_embeddings", "embedding_column");
+        auto tm = make_basic_mapping();
 
-        CHECK(sql == BUILD_SQL_ONE);
+        std::string sql = builder.build_upsert_sql(tm);
+
+        CHECK(sql ==
+            "INSERT INTO test_embeddings "
+            "(item_id, item_body, embedding_column) VALUES ($1, $2, $3::vector) "
+            "ON CONFLICT (item_id) DO UPDATE SET item_body = EXCLUDED.item_body, "
+            "embedding_column = EXCLUDED.embedding_column");
     }
 
-    TEST_CASE("build_upsert() with metadat columns builds a valid sql") 
+    TEST_CASE("build_upsert_sql includes metadata columns") 
     {
-        pgcdc::PgEmbeddingSinkConfig sink_cfg;
-        pgcdc::TableMapping tm;
-        pgcdc::EmbeddingConfig embed_cfg;
-        
-        std::shared_ptr<pgcdc::EmbeddingProvider> provider = std::make_shared<TestEmbedProvider>(embed_cfg);
-        provider->init();
-       
-        tm.id_source_ = "id";
-        tm.id_sink_ ="item_id";
-        tm.embed_source_ = "body";
-        tm.embed_sink_ = "item_body";
+        pgcdc::PgSqlBuilder builder("test_embeddings", "embedding_column");
+        auto tm = make_basic_mapping();
 
-        pgcdc::ColumnMapping cm_metadata;
-        cm_metadata.source_column = "category";
-        cm_metadata.sink_column = "category";
-        cm_metadata.role = "metadata";
-        tm.columns.push_back(cm_metadata);
-        
-        sink_cfg.pg_conninfo = "host=localhost port=5432 dbname=postgres user=test password=test";
-        sink_cfg.sink_table  = "test_embeddings";
-        sink_cfg.sink_column = "embedding_column";
-        sink_cfg.mappings.push_back(tm);
-        
-        pgcdc::TestEmbedSink sink(sink_cfg, provider);
-        std::string sql = sink.build_upsert_sql_public(tm);
+        pgcdc::ColumnMapping cm;
+        cm.source_column = "category";
+        cm.sink_column = "category";
+        cm.role = "metadata";
+        tm.columns.push_back(cm);
 
-        CHECK(sql == BUILD_SQL_TWO);
+        std::string sql = builder.build_upsert_sql(tm);
+
+        CHECK(sql ==
+            "INSERT INTO test_embeddings "
+            "(item_id, item_body, category, embedding_column) VALUES ($1, $2, $3, $4::vector) "
+            "ON CONFLICT (item_id) DO UPDATE SET item_body = EXCLUDED.item_body, "
+            "category = EXCLUDED.category, embedding_column = EXCLUDED.embedding_column");
     }
 
-    TEST_CASE("build_upsert() with imultiple sources and static discriminator builds a valid sql") 
+    TEST_CASE("build_upsert_sql includes discriminator in conflict key, not in update set") 
     {
-        pgcdc::PgEmbeddingSinkConfig sink_cfg;
-        pgcdc::TableMapping tm;
-        pgcdc::EmbeddingConfig embed_cfg;
-
-        std::shared_ptr<pgcdc::EmbeddingProvider> provider = std::make_shared<TestEmbedProvider>(embed_cfg);
-        provider->init();
-
-        tm.source_table = "test_table";
-        tm.id_source_ = "id";
-        tm.id_sink_ = "item_id";
-        tm.embed_source_ = "body";
-        tm.embed_sink_ = "item_body";
+        pgcdc::PgSqlBuilder builder("test_embeddings_msource", "embedding_column");
+        auto tm = make_basic_mapping();
         tm.has_discriminator_ = true;
         tm.discriminator_sink_ = "category";
         tm.discriminator_label_ = "test_table";
 
-        sink_cfg.pg_conninfo = "host=localhost port=5432 dbname=postgres user=test password=test";
-        sink_cfg.sink_table  = "test_embeddings";
-        sink_cfg.sink_column = "embedding_column";
-        sink_cfg.mappings.push_back(tm);
+        std::string sql = builder.build_upsert_sql(tm);
 
-        pgcdc::TestEmbedSink sink(sink_cfg, provider);
-        std::string sql = sink.build_upsert_sql_public(tm);
-        CHECK(sql == BUILD_SQL_DISCRIMINATOR); // same SQL string as before
+        CHECK(sql ==
+            "INSERT INTO test_embeddings_msource "
+            "(item_id, category, item_body, embedding_column) VALUES ($1, $2, $3, $4::vector) "
+            "ON CONFLICT (item_id, category) DO UPDATE SET item_body = EXCLUDED.item_body, "
+            "embedding_column = EXCLUDED.embedding_column");
+    }
+
+    TEST_CASE("build_delete_sql without discriminator") 
+    {
+        pgcdc::PgSqlBuilder builder("test_embeddings", "embedding_column");
+        auto tm = make_basic_mapping();
+
+        std::string sql = builder.build_delete_sql(tm);
+
+        CHECK(sql == "DELETE FROM test_embeddings WHERE item_id = $1");
+    }
+
+    TEST_CASE("build_delete_sql with discriminator") 
+    {
+        pgcdc::PgSqlBuilder builder("test_embeddings_msource", "embedding_column");
+        auto tm = make_basic_mapping();
+        tm.has_discriminator_ = true;
+        tm.discriminator_sink_ = "category";
+        tm.discriminator_label_ = "documents";
+
+        std::string sql = builder.build_delete_sql(tm);
+
+        CHECK(sql == "DELETE FROM test_embeddings_msource WHERE item_id = $1 AND category = $2");
     }
 }

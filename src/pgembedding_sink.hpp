@@ -5,9 +5,10 @@
 #include <string>
 #include <vector>
  
+#include "config.hpp"
 #include "embedding_provider.hpp"
 #include "event_sink.hpp"
-#include "config.hpp"
+#include "sql_builder.hpp"
 
 namespace pgcdc 
 {
@@ -24,7 +25,7 @@ class PgEmbeddingSink : public EmbeddingSink
 {
 public:
     explicit PgEmbeddingSink(PgEmbeddingSinkConfig config, 
-		    	     std::shared_ptr<EmbeddingProvider> provider);
+                             std::shared_ptr<EmbeddingProvider> provider);
     ~PgEmbeddingSink() override;
  
     PgEmbeddingSink(const PgEmbeddingSink&) = delete;
@@ -33,13 +34,12 @@ public:
     void init() override;
     void call(const ChangeEvent& event) override;
 
-protected:
-    std::string build_upsert_sql(const TableMapping& tm);
-
 private:
     PgEmbeddingSinkConfig config_;
-    std::shared_ptr<EmbeddingProvider> provider_; 
+    std::shared_ptr<EmbeddingProvider> provider_;
+    std::unique_ptr<ISqlBuilder> sql_builder_;
     std::unordered_map<std::string, std::string> upsert_sql_list_;
+    std::unordered_map<std::string, std::string> delete_sql_list_;
     PGconn* pg_ = nullptr;
 
 
