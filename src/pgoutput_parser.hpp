@@ -27,7 +27,10 @@ public:
 
 private:
     std::unordered_map<uint32_t, RelationInfo> relations_;
+    uint64_t pending_commit_timestamp_unix_us_ = 0;
+
     void handle_relation(const uint8_t* data, size_t len);
+    void handle_begin(const uint8_t* data, size_t len);
     DecodedRow decode_tuple(const RelationInfo& rel, const uint8_t*& p, const uint8_t* end, TupleKind kind);
 };
 

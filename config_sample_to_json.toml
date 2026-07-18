@@ -18,7 +18,7 @@ password    = "quser1234"
 slot_name   = "cdc_slot"
 publication = "test_pub"
 
-[sink]
+[[sink]]
 type 	     	= "json-output"	
 output_target   = "stdout"
 

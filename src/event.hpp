@@ -57,10 +57,11 @@ struct ChangeEvent
     enum class Op { Insert, Update, Delete } op;
     std::string schema_name;
     std::string table_name;
-    std::optional<DecodedRow> old_row; // present for Update (if REPLICA IDENTITY FULL) and Delete
-    std::optional<DecodedRow> new_row; // present for Insert and Update
-    uint64_t commit_lsn = 0; // the LSN to acknowledge once this event is durably handled
-
+    std::optional<DecodedRow> old_row;  // present for Update (if REPLICA IDENTITY FULL) and Delete
+    std::optional<DecodedRow> new_row;  // present for Insert and Update
+    uint64_t commit_lsn = 0;            // the LSN to acknowledge once this event is durably handled
+    uint64_t commit_timestamp = 0;      // transaction commit time, microseconds since Unix epoch
+    
     static std::string to_string(const Op& k)
     {
         switch (k) {
@@ -76,7 +77,8 @@ struct ChangeEvent
 		    {"op", to_string(e.op)},
 		    {"schema", e.schema_name},
 	        {"table", e.table_name},
-	        {"lsn", e.commit_lsn}
+	        {"lsn", e.commit_lsn},
+	        {"commit_timestamp", e.commit_timestamp}
         };
         
         if (e.old_row) {

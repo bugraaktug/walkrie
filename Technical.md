@@ -84,7 +84,7 @@ password    = "quser1234"
 slot_name   = "cdc_slot"
 publication = "test_pub"
 
-[sink]
+[[sink]]
 host            = "localhost"
 port            = "5432"
 dbname          = "qdb"
@@ -141,7 +141,7 @@ password    = "quser1234"
 slot_name   = "pgcdc_slot"
 publication = "pgcdc_pub"
 
-[sink]
+[[sink]]
 host            = "localhost"
 port            = "5432"
 dbname          = "qdb"

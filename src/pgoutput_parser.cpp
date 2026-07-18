@@ -3,11 +3,26 @@
 
 #include <cstring>
 #include <stdexcept>
+#include <spdlog/spdlog.h>
 
 using namespace bytes;
 
 namespace pgcdc 
 {
+
+namespace 
+{
+
+constexpr uint64_t kPgEpochOffsetUs = 946684800ULL * 1'000'000ULL; // 2000-01-01 vs Unix epoch, in microseconds
+
+uint64_t read_u64(const uint8_t* p) 
+{
+    uint64_t v = 0;
+    for (int i = 0; i < 8; ++i) v = (v << 8) | static_cast<uint8_t>(p[i]);
+    return v;
+}
+
+} // namespace
 
 void PgOutputParser::handle_relation(const uint8_t* data, size_t len) 
 {
@@ -36,6 +51,17 @@ void PgOutputParser::handle_relation(const uint8_t* data, size_t len)
     }
 
     relations_[rel.relation_id] = std::move(rel);
+}
+
+void PgOutputParser::handle_begin(const uint8_t* data, size_t len)
+{
+    // type(1) + final_lsn(8) + commit_timestamp(8) + xid(4) = 21 bytes
+    if (len < 20) {
+        spdlog::warn("[PgOutputParser] truncated Begin message ({} bytes)", len);
+        return;
+    }
+    uint64_t pg_epoch_us = read_u64(data + 8); // skip type(1) + final_lsn(8)
+    pending_commit_timestamp_unix_us_ = pg_epoch_us + kPgEpochOffsetUs;
 }
 
 DecodedRow PgOutputParser::decode_tuple(const RelationInfo& rel, const uint8_t*& p, const uint8_t* end, TupleKind kind) 
@@ -81,8 +107,7 @@ std::optional<ChangeEvent> PgOutputParser::parse(const uint8_t* data, size_t len
 
     switch (msg_type) {
         case 'B': // Begin — carries final LSN + commit timestamp + xid.
-            // We don't need anything from Begin for week 1; Commit's LSN is
-            // what we actually checkpoint against.
+            handle_begin(p, static_cast<size_t>(end -p));
             return std::nullopt;
 
         case 'C': // Commit
@@ -121,6 +146,7 @@ std::optional<ChangeEvent> PgOutputParser::parse(const uint8_t* data, size_t len
             ev.schema_name = it->second.schema_name;
             ev.table_name = it->second.table_name;
             ev.new_row = std::move(new_row);
+            ev.commit_timestamp = pending_commit_timestamp_unix_us_;
             return ev;
         }
 
@@ -135,6 +161,7 @@ std::optional<ChangeEvent> PgOutputParser::parse(const uint8_t* data, size_t len
             ev.op = ChangeEvent::Op::Update;
             ev.schema_name = it->second.schema_name;
             ev.table_name = it->second.table_name;
+            ev.commit_timestamp = pending_commit_timestamp_unix_us_;
 
             uint8_t tag = read_u8(p);
             // 'K' = old tuple is key-only (REPLICA IDENTITY DEFAULT, no real change in non-key cols sent)
@@ -161,6 +188,7 @@ std::optional<ChangeEvent> PgOutputParser::parse(const uint8_t* data, size_t len
             ev.op = ChangeEvent::Op::Delete;
             ev.schema_name = it->second.schema_name;
             ev.table_name = it->second.table_name;
+            ev.commit_timestamp = pending_commit_timestamp_unix_us_;
 
             uint8_t tag = read_u8(p); // 'K' (key-only) or 'O' (full old row, our setup)
             ev.old_row = decode_tuple(it->second, p, end, TupleKind::Delete);

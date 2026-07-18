@@ -148,6 +148,7 @@ TEST_SUITE("PgOutputParser")
         CHECK(event->table_name == "test_table");
         REQUIRE(event->new_row.has_value());
         CHECK(!event->old_row.has_value());
+        CHECK(event->commit_timestamp > 0);
 
         auto* id = find_col(*event->new_row, "id");
         REQUIRE(id != nullptr);
