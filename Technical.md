@@ -192,6 +192,53 @@ n_ctx      = 512
 
 **Note on `discriminator_column`:** this is needed when multiple source tables share a sink table and may use overlapping id values. The discriminator column must also exist as part of a real unique constraint on the sink table — otherwise different mappings will generate mismatched ON CONFLICT targets (e.g. some as (item_id), others as (item_id, category)), and Postgres will reject whichever ones don't match the actual constraint on the table.
 
+It is also possible to define multiple sink blocks(postgres-embedding and json-output):
+
+**Note on defaults:** The default sink is postgres-embedding
+
+```toml
+...
+[[source]]
+host        = "localhost"
+port        = "5432"
+dbname      = "qdb"
+user        = "quser"
+password    = "quser1234"
+slot_name   = "cdc_slot"
+publication = "test_pub"
+
+[[source]]
+host        = "localhost"
+port        = "5432"
+dbname      = "qdb"
+user        = "quser"
+password    = "quser1234"
+slot_name   = "pgcdc_slot"
+publication = "pgcdc_pub"
+
+[[sink]]
+type        = "json-output"
+output_type = "stdout"
+
+[[sink]]
+type        = "postgres-embedding"
+host            = "localhost"
+port            = "5432"
+dbname          = "qdb"
+user            = "quser"
+password        = "quser1234"
+table           = "public.test_embeddings_msource"
+embed_column    = "embedding"
+
+ [[sink.table_mapping]]
+ source_table = "test_table"
+ discriminator_column = "category"
+ discriminator_label  = "test"
+ ....
+
+.... 
+```
+
 To use OpenAI instead of a local model, replace the `[embedding]` block:
 
 ```toml
