@@ -2,7 +2,7 @@
 #include <string>
 #include <vector>
 
-#include "include/config.hpp"
+#include "config.hpp"
 #include "pg_sql_builder.hpp"
 
 namespace 

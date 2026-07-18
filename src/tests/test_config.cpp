@@ -1,5 +1,6 @@
 #include <doctest.h>
-#include "include/config.hpp"
+#include "config.hpp"
+#include "pgsink_configuration.hpp"
 
 TEST_SUITE("validate_configuration") 
 {
@@ -7,6 +8,8 @@ TEST_SUITE("validate_configuration")
     TEST_CASE("validate() catches missing dbname") 
     {
         pgcdc::AppConfig cfg;
+        std::unique_ptr<pgcdc::PgSinkConfiguration> sink = std::make_unique<pgcdc::PgSinkConfiguration>();
+        cfg.sinks.push_back(std::move(sink));
         auto errors = cfg.validate();
         CHECK(errors.size() > 0);
         bool found = false;
@@ -22,8 +25,10 @@ TEST_SUITE("validate_configuration")
         cfg.sources.push_back({});
         cfg.sources[0].dbname = "qdb";
         cfg.sources[0].user   = "quser";
-        cfg.sink.dbname = "qdb";
-        cfg.sink.user   = "quser";
+        std::unique_ptr<pgcdc::PgSinkConfiguration> sink = std::make_unique<pgcdc::PgSinkConfiguration>();
+        sink->dbname = "qdb";
+        sink->user   = "quser";
+        cfg.sinks.push_back(std::move(sink));
     
         // No table_mappings added — should fail
         auto errors = cfg.validate();

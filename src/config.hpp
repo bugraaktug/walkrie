@@ -7,6 +7,8 @@
 
 #include <toml.hpp>
 
+#include "sink_configuration.hpp"
+
 namespace pgcdc 
 {
 
@@ -68,18 +70,6 @@ struct TableMapping
     }
 };
 
-struct SinkConfig 
-{
-    std::string host     = "localhost";
-    std::string port     = "5432";
-    std::string dbname;
-    std::string user;
-    std::string password;
-    std::string table;
-    std::string embedding_column;
-    std::vector<TableMapping> table_mappings;
-};
-
 struct EmbeddingConfig 
 {
     std::string provider    = "llama";   // "llama" or "openai" (openai = future stub)
@@ -93,10 +83,10 @@ struct EmbeddingConfig
 
 struct AppConfig 
 {
-    AppSettings                 settings;
-    std::vector<SourceConfig>   sources;
-    SinkConfig                  sink;
-    EmbeddingConfig             embedding;
+    AppSettings                                     settings;
+    std::vector<SourceConfig>                       sources;
+    std::vector<std::unique_ptr<SinkConfiguration>> sinks;
+    EmbeddingConfig                                 embedding;
 
     std::vector<std::string> validate() const {
         std::vector<std::string> errors;
@@ -127,18 +117,6 @@ struct AppConfig
             }
         }
 
-        if (sink.dbname.empty()) {
-            errors.push_back("[sink] dbname is required");
-        }
-	    if (sink.user.empty()) {
-            errors.push_back("[sink] user is required");
-        }
-	    if (sink.table.empty()) {
-            errors.push_back("[sink] table is required");
-        }
-	    if (sink.embedding_column.empty()) {
-            errors.push_back("[sink] embedding column is required");
-        }
         if (embedding.provider != "llama" && embedding.provider != "openai") {
             errors.push_back("[embedding] provider must be 'llama' or 'openai'");
         }
@@ -167,26 +145,18 @@ struct AppConfig
             if (embedding.model == "text-embedding-ada-002" && embedding.dimensions != 1536) {
                 errors.push_back("[embedding] text-embedding-ada-002 does not support dimension truncation — dimensions must be exactly 1536");
             }
-        }   
+        }
 
-        if (sink.table_mappings.empty()) {
-            errors.push_back("[sink] at least one [[sink.table_mapping]] block is required");
-        }
-        for (const auto& tm : sink.table_mappings) {
-            if (tm.source_table.empty()) {
-                errors.push_back("[sink.table_mapping] source_table is required");
-            }
-            if (tm.id_source_.empty()) {
-                errors.push_back("[sink.table_mapping:" + tm.source_table + "] needs a mapping with role='id'");
-            }
-            if (tm.embed_source_.empty()) {
-                errors.push_back("[sink.table_mapping:" + tm.source_table + "] needs a mapping with role='embed'");
-            }
-            if (tm.has_discriminator_ && tm.discriminator_label_.empty()) {
-                errors.push_back("[sink.table_mapping:" + tm.source_table +
-                                 "] discriminator_column is set but discriminator_label is empty");
+        for (size_t i = 0; i < sinks.size(); ++i) {
+            const auto& sink = sinks[i];
+            if (sink) {
+                auto sink_errors = sink->validate();
+                errors.insert(errors.end(), sink_errors.begin(), sink_errors.end());
+            } else {
+                errors.push_back("[sink] a valid sink type is required");
             }
         }
+
         return errors;
     }
 };
@@ -237,50 +207,18 @@ inline AppConfig load_config(const std::string& path)
 	        }
 	        cfg.sources.push_back(repl_cfg);
     	}
-    }	    
-
-    if (auto* s = tbl["sink"].as_table()) {
-        cfg.sink.host     = str(s, "host",     cfg.sink.host);
-        cfg.sink.port     = str(s, "port",     cfg.sink.port);
-        cfg.sink.dbname   = str(s, "dbname",   cfg.sink.dbname);
-        cfg.sink.user     = str(s, "user",     cfg.sink.user);
-        cfg.sink.password = str(s, "password", cfg.sink.password);
-        cfg.sink.table    = str(s, "table",    cfg.sink.table);
-        if (auto* tm_arr = (*s)["table_mapping"].as_array()) {
-            for (auto& tm_elem : *tm_arr) {
-                TableMapping tm;
-                if (auto* t = tm_elem.as_table()) {
-                    tm.source_table = str(t, "source_table", "");
-                    std::string disc_col = str(t, "discriminator_column", "");
-                    std::string disc_lbl = str(t, "discriminator_label", "");
-                    if (!disc_col.empty()) {
-                        tm.has_discriminator_  = true;
-                        tm.discriminator_sink_  = disc_col;
-                        tm.discriminator_label_ = disc_lbl;
-                    }
-
-                    if (auto* col_arr = (*t)["columns"].as_array()) {
-                        for (auto& col_elem : *col_arr) {
-                            ColumnMapping m;
-                            if (auto* c = col_elem.as_table()) {
-                                m.source_column = str(c, "source_column", "");
-                                m.sink_column   = str(c, "sink_column",   "");
-                                m.role          = str(c, "role",          "");
-                            }
-                            if (!m.source_column.empty() && !m.role.empty())
-                                tm.columns.push_back(m);
-                        }   
-                    }
-                    tm.resolve_columns();
-                }
-                if (!tm.source_table.empty()) {
-                    cfg.sink.table_mappings.push_back(tm);
-                }
+    }
+    
+    if (auto* arr = tbl["sink"].as_array()) {
+        for (auto& elem : *arr) {
+            if (auto* s = elem.as_table()) {
+                std::string sink_type = str(s, "type", "postgres-embedding");
+                auto sink = instantiate_sink(sink_type);
+                sink->load_from_config(*s);
+                cfg.sinks.push_back(std::move(sink));
             }
         }
-        cfg.sink.embedding_column = str(s, "embed_column",    cfg.sink.embedding_column);
     }
-
 
     if (auto* e = tbl["embedding"].as_table()) {
         cfg.embedding.provider    = str(e, "provider",     cfg.embedding.provider);

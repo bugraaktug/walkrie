@@ -61,6 +61,9 @@ add_library(walkrie_core STATIC
     src/event_dispatcher.cpp
     src/http_client.cpp
     src/pg_sql_builder.cpp
+    src/sink_configuration.cpp
+    src/pgsink_configuration.cpp
+    src/jsonsink_configuration.cpp
     src/pgoutput_parser.cpp
     src/pgreplication_source.cpp
     src/llama_provider.cpp

@@ -35,47 +35,6 @@ void init_logger(const pgcdc::AppSettings& settings) {
     }
 }
 
-std::shared_ptr<pgcdc::EventSink> create_json_print_sink()
-{
-    struct JsonPrintSink : pgcdc::EventSink {
-        void call(const pgcdc::ChangeEvent& event) override {
-	        auto j = ordered_json(event);
-            std::cout << j.dump(2) << "\n";
-	    }
-    }; 
-    return std::make_shared<JsonPrintSink>();
-}
-
-std::shared_ptr<pgcdc::EventSink> create_pgembedding_sink(const pgcdc::AppConfig& cfg)
-{
-    std::shared_ptr<pgcdc::EmbeddingProvider> provider;
-    try {
-        provider = pgcdc::make_embedding_provider(cfg.embedding);
-        provider->init();
-    } catch (const std::exception& e) {
-        spdlog::info("[EmbeddingProvider] failed to initialized — {}", e.what());
-        throw std::runtime_error("EmbeddingProvider: failed to create context");
-    }
-
-    // --- PgEmbeddingSink config from AppConfig ---
-    pgcdc::PgEmbeddingSinkConfig sink_cfg;
-    {
-        std::ostringstream conn;
-        conn << "host="     << cfg.sink.host
-             << " port="    << cfg.sink.port
-             << " dbname="  << cfg.sink.dbname
-             << " user="    << cfg.sink.user
-             << " password=" << cfg.sink.password;
-        sink_cfg.pg_conninfo = conn.str();
-        sink_cfg.sink_table  = cfg.sink.table;
-        sink_cfg.sink_column = cfg.sink.embedding_column;
-        sink_cfg.mappings    = cfg.sink.table_mappings;
-    }
-    auto pg_sink = std::make_shared<pgcdc::PgEmbeddingSink>(sink_cfg, provider);
-    pg_sink->init();
-
-    return pg_sink;
-}
 
 int main(int argc, char** argv) 
 {
@@ -127,8 +86,10 @@ int main(int argc, char** argv)
     }
 
     std::vector<std::shared_ptr<pgcdc::EventSink>> sinks;
-    sinks.push_back(create_pgembedding_sink(cfg));
-    sinks.push_back(create_json_print_sink());
+    for (const auto& sink_instance : cfg.sinks) {
+        auto sink = sink_instance->create_sink(cfg.embedding);
+        sinks.push_back(sink);
+    }
 
     auto dispatch_handle = [&](const pgcdc::ChangeEvent& event) {
 	    pgcdc::EventJob job;
