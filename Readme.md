@@ -22,12 +22,12 @@ Most CDC-to-vector pipelines today are built from general-purpose tools (Debeziu
 * **Real-time WAL streaming** via native logical replication slot listener.
 * **Multi-table mapping** — configure multiple source tables, each with independent column mappings, in a single config file. Multiple sources can share one sink table using a static discriminator label, so overlapping IDs across tables never collide.
 * **OpenAI & local Llama integrations** — switch embedding provider via a single config field.
+* **Pre-flight data validation layer** (null/duplicate filtering before embedding calls).
 * **Upsert-based sink writes** — idempotent by design; replays and reconnects don't duplicate rows.
 
 ## Roadmap
 
 * Batched embedding API requests (currently one HTTP call per row for OpenAI provider).
-* Pre-flight data validation layer (null/duplicate filtering before embedding calls).
 * Vector index management helpers (HNSW index creation/verification on sink tables).
 * Published performance benchmarks (throughput, replication lag, memory footprint) under real load.
 
@@ -38,7 +38,8 @@ Most CDC-to-vector pipelines today are built from general-purpose tools (Debeziu
 
 ## Security & Deployment
 
-Walkrie runs entirely within your own infrastructure. Database credentials, replicated data, and schema details stay local to wherever you deploy the binary — nothing is sent to Walkrie or any third party. If you configure the OpenAI embedding provider, only the specific text fields you've mapped for embedding are sent to OpenAI's API, under OpenAI's own data handling terms — Walkrie itself does not collect or transmit any data.
+Walkrie runs entirely within your own infrastructure. Database credentials, replicated data, and schema details stay local to wherever you deploy the binary — nothing is sent to any third party. 
+If you configure the OpenAI embedding provider, only the specific text fields you've mapped for embedding are sent to OpenAI's API, under OpenAI's own data handling terms — Walkrie itself does not collect or transmit any data.
 
 ---
 
