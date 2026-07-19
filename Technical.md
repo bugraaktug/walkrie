@@ -268,5 +268,4 @@ CREATE INDEX ON test_embeddings USING hnsw (embedding vector_cosine_ops);
 HNSW is recommended over IVFFlat for tables receiving continuous writes: IVFFlat's clustering is fixed at index-build time and degrades in recall quality as new data drifts from the original distribution, requiring periodic `REINDEX`. HNSW updates incrementally as rows are inserted, which matches Walkrie's continuous-write pattern.
 
 ## Performance
-
-*Benchmarks pending — a load test (bulk insert of 1M rows, measuring end-to-end replication lag and resource usage) is planned. Numbers will be published here once available.*
+Benchmark methodology and results (lag, throughput, CPU/RAM) are tracked separately in PERFORMANCE.md, including a breakdown of pipeline overhead vs. embedding provider latency across both local (Llama) and remote (OpenAI) providers.
