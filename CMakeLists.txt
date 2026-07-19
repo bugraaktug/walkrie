@@ -111,5 +111,27 @@ target_include_directories(walkrie_tests PRIVATE
 )
 target_link_libraries(walkrie_tests PRIVATE walkrie_core)
 
+# --- bench ---
+add_executable(walkrie_bench
+    src/bench/walkrie_bench.cpp
+    src/bench/resource_sampler.cpp
+)
+target_include_directories(walkrie_bench PRIVATE
+    src
+    src/include
+    src/third_party
+)
+target_link_libraries(walkrie_bench PRIVATE walkrie_core)
+
+# --- embedding bench ---
+add_executable(embedding_bench src/bench/embedding_bench.cpp)
+target_include_directories(embedding_bench PRIVATE
+    src
+    src/include
+    src/third_party
+)
+target_link_libraries(embedding_bench PRIVATE walkrie_core)
+#
+
 enable_testing()
 add_test(NAME unit_tests COMMAND walkrie_tests)

@@ -1,0 +1,31 @@
+# walkrie config
+# Pass path to this file as the only CLI arg: ./walkrie /path/to/config.toml
+# walkrie config
+# Usage: ./walkrie /path/to/config.toml
+
+[app]
+log_level = "debug"   # trace / debug / info / warn / error / critical
+log_file  = "/tmp/logs/walkrie.log"
+log_max_size_mb  = 10
+log_max_files    = 5
+
+[[source]]
+host        = "localhost"
+port        = "5432"
+dbname      = "qdb"
+user        = "quser"
+password    = "quser1234"
+slot_name   = "cdc_slot"
+publication = "test_pub"
+
+[[sink]]
+type 	     	= "json-output"	
+output_target   = "discard"
+
+[embedding]
+provider   = "llama"
+model_path = "/home/debian/models/bge-m3/bge-m3-Q4_K_M.gguf"
+api_key    = ""
+dimensions = 1024
+n_threads  = 4
+n_ctx      = 512
