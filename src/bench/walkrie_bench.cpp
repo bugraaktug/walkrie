@@ -84,6 +84,7 @@ int main(int argc, char** argv)
     // Sink/source internals may still call spdlog; if that turns out to
     // add noticeable overhead, redirect to a null sink for the benchmark.
     spdlog::set_level(spdlog::level::off);
+    //spdlog::set_level(spdlog::level::from_str("debug"));
 
     pgcdc::bench::LagStats lag_stats;
 
@@ -95,7 +96,6 @@ int main(int argc, char** argv)
     std::vector<std::shared_ptr<pgcdc::EventSink>> sinks{ bench_sink };
 
     pgcdc::http_global_init();
-
     event_base* base = event_base_new();
     if (!base) {
         std::cerr << "event_base_new() failed\n";
@@ -124,11 +124,6 @@ int main(int argc, char** argv)
         job.ev = event;
         job.sinks = sinks;
         dispatcher.post_job(std::move(job));
-
-        if (target_count > 0 && bench_sink->processed_count() >= target_count) {
-            g_stop = true;
-            event_base_loopbreak(base);
-        }
     };
 
     for (auto& source : sources) {
@@ -166,7 +161,31 @@ int main(int argc, char** argv)
               << (duration_secs > 0 ? ", duration=" + std::to_string(duration_secs) + "s" : "")
               << " — Ctrl-C to stop early\n";
 
+
+    struct CompletionCheckCtx {
+        pgcdc::bench::BenchmarkingSink* sink;
+        size_t target_count;
+        event_base* base;
+    };
+    CompletionCheckCtx check_ctx{ bench_sink.get(), target_count, base };
+
+    event* completion_timer = nullptr;
+    if (target_count > 0) {
+        completion_timer = event_new(base, -1, EV_PERSIST,
+            [](evutil_socket_t, short, void* arg) {
+                auto* ctx = static_cast<CompletionCheckCtx*>(arg);
+                if (ctx->sink->processed_count() >= ctx->target_count) {
+                    event_base_loopbreak(ctx->base);
+                }
+            },
+            &check_ctx);
+        struct timeval interval{0, 20000}; // check every 20ms — cheap, frequent enough
+        event_add(completion_timer, &interval);
+    }
+
+    
     auto bench_start = std::chrono::steady_clock::now();
+    spdlog::debug("[walkrie_bench] event loop starting now");
     event_base_dispatch(base);
     auto bench_end = std::chrono::steady_clock::now();
 
@@ -176,18 +195,28 @@ int main(int argc, char** argv)
     // dispatcher's destructor drains remaining queued jobs and joins its
     // worker thread when it goes out of scope below.
 
+    if (completion_timer) {
+        event_free(completion_timer);
+    }
+
     double wall_secs = std::chrono::duration<double>(bench_end - bench_start).count();
     size_t processed = bench_sink->processed_count();
     auto lag_summary = lag_stats.summarize();
     auto res_report = sampler.summarize();
 
-    std::cout << "\n=== walkrie_bench report ===\n";
+    auto processing_secs = std::chrono::duration<double>(
+    bench_sink->last_event_time() - bench_sink->first_event_time()).count();
+
+   std::cout << "\n=== walkrie_bench report ===\n";
     std::cout << "sink type:         " << cfg.sinks.front()->type() << "\n";
     std::cout << "events processed:  " << processed << "\n";
     std::cout << "wall time:         " << std::fixed << std::setprecision(2) << wall_secs << " s\n";
     std::cout << "throughput:        " << std::fixed << std::setprecision(1)
                << (processed / std::max(wall_secs, 0.001)) << " events/sec\n";
-
+    std::cout << "total wall time:      " << wall_secs << " s (includes connection setup)\n";
+    std::cout << "pure processing time: " << processing_secs << " s (first row -> last row)\n";
+    std::cout << "processing throughput: " << (processed / std::max(processing_secs, 0.001)) << " events/sec\n";
+ 
     if (lag_summary_count_warning(lag_stats)) {
         std::cout << "\n(no lag samples recorded — commit_timestamp may be 0; "
                      "confirm PgOutputParser::handle_begin fix is in place)\n";

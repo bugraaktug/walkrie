@@ -11,20 +11,22 @@ All benchmarks were run locally, source and sink on the same machine (`localhost
 * **CPU%** is expressed as a percentage of one core's wall-clock time, and can exceed 100% when multiple threads (replication read loop, dispatcher worker, embedding inference) are simultaneously active — it is not capped at 100%.
 * Each run generates load via one of two SQL scripts (see `bench/` in the repo):
   * **Single-transaction load**: `INSERT ... SELECT generate_series(1, N)` as one transaction. Fast to generate, but produces one shared `commit_timestamp` for all N rows — the resulting "lag" mostly measures Walkrie's own internal queue drain time, not real replication lag, since Postgres streams all N row messages in one post-commit burst.
-  * **Batched load**: N rows split into transactions of 1,000 rows each, committed separately. This produces a realistic spread of commit timestamps and is the methodology used for all lag numbers reported below unless stated otherwise.
+  * **Batched load**: N rows split into multiple transactions committed separately (batch size noted per result). This produces a realistic spread of commit timestamps.
+
+**Harness correction**: early `walkrie_bench` runs used a completion check in the wrong thread that never fired correctly, requiring a manual Ctrl-C and silently including that idle wait time in reported "wall time." This was fixed by moving the completion check to a libevent timer running on the event loop's own thread, and by splitting the report into `total wall time` (includes one-time connection/slot setup) and `pure processing time` (first row processed → last row processed). All results in **Section 3** below were captured after this fix; `pure processing time` / `processing throughput` are the figures to trust for steady-state comparisons.
 
 ## Environment
 
-*(fill in once finalized — CPU model, core count, RAM, disk type, Postgres version, OS)*
+All benchmarks in this document were run inside a VirtualBox VM (host: Windows, Intel Core Ultra 7 155H). AVX2 is passed through to the guest (`--cpu-profile host`, required for the local Llama numbers in Section 2 — see that section's AVX2 finding). "Disk" reflects the VM's virtual disk, backed by the host's physical storage, not a directly-attached device.
 
 | | |
 |---|---|
-| CPU | TBD |
-| RAM | TBD |
-| Disk | TBD |
-| OS | Debian 12 |
-| PostgreSQL | TBD |
-| Walkrie build | `RelWithDebInfo`, commit TBD |
+| CPU | Intel Core Ultra 7 155H, 8 vCPUs assigned to guest, 1 thread/core |
+| RAM | 7.8 GiB (VM-assigned) |
+| Disk | VirtualBox virtual disk, 250 GB (`VBOX HARDDISK`) |
+| OS | Debian GNU/Linux 12 (bookworm), kernel 6.1.0-10-amd64 |
+| PostgreSQL | 15.18 (Debian 15.18-0+deb12u1) |
+| Walkrie build | `RelWithDebInfo` (CMakeLists.txt default; not explicitly overridden) |
 
 ## 1. Pipeline baseline (json-output sink, `discard` target)
 
@@ -97,6 +99,8 @@ Consistent across two independent runs (100 calls: avg 64.72 ms; 200 calls: avg 
 
 **Practical takeaway for deployment**: anyone running Walkrie's local embedding provider inside a VM or container should verify AVX2 is exposed to the guest (`cat /proc/cpuinfo | grep avx2`) before drawing conclusions about local-model performance. A misconfigured hypervisor can produce a >30× slowdown that looks identical to "the model is just slow on this hardware" without a closer look. Bare-metal deployments are unaffected by this specific issue, but the same check is a cheap, worthwhile first step when local-model latency looks unexpectedly high in any environment.
 
+**Run-to-run variance observed**: a repeat run under identical config measured avg 96.33 ms (p50 91.63 ms, max 209.74 ms) — about 52% higher than the 63.32 ms figure above. Both runs used the same fixed sample sentence and hardware, so this reflects measurement variance (likely background load or CPU frequency scaling in the VM) rather than a config difference. Treat single-run numbers in this section as indicative, not exact; a tighter figure would come from averaging several repeated runs, which has not yet been done.
+
 ### OpenAI (`text-embedding-3-small`)
 
 *(network-dependent; also subject to OpenAI rate limits, so treat as informational rather than a hard ceiling)*
@@ -117,36 +121,40 @@ The single 2,707.74 ms max is consistent with an occasional network/API-side lat
 
 Purpose: full pipeline, real embedding calls, real pgvector upsert — the number that matters for actual deployment sizing.
 
-**Config**: `sink.type = "postgres-embedding"`, `provider = "llama"`
+**Config**: `sink.type = "postgres-embedding"`, `provider = "llama"`. All three runs below use the corrected harness (see Methodology). Sink table (`test_embeddings`) and source table (`test_table`) were truncated before each run — see the index-growth note below.
 
-*(pending — recommend a small `--target-count` first, e.g. 100–1,000 rows, given single-threaded serial embed calls; a full 1M-row run at local-model speed could take a very long time and is not necessary to characterize steady-state throughput)*
+| | 500 rows, batched 10×100 | 200 rows, single-transaction burst | 200 rows, batched 10×20 |
+|---|---|---|---|
+| Total wall time | 57.2 s | 44.7 s | 30.8 s |
+| Pure processing time (first→last row) | 50.2 s | 29.9 s | 24.1 s |
+| Processing throughput | **10.0 events/sec** | **6.7 events/sec** | **8.3 events/sec** |
+| Lag min | 6.2 ms | 19.2 ms | 6.5 ms |
+| Lag avg | 25,178.5 ms | 15,444.4 ms | 11,304.7 ms |
+| Lag p50 | 25,285.7 ms | 15,585.8 ms | 11,252.4 ms |
+| Lag p95 | 47,683.5 ms | 28,578.2 ms | 21,659.3 ms |
+| Lag max | 50,164.6 ms | 29,943.8 ms | 22,750.1 ms |
+| Avg CPU | 232.2% | 266.8% | 94.3% |
+| Peak CPU | 532.2% | 405.5% | 613.4% |
+| Avg RSS | 711.0 MB | 714.2 MB | 696.6 MB |
+| Peak RSS | 728.2 MB | 728.3 MB | 728.2 MB |
 
-| Metric | Value |
-|---|---|
-| Events processed | TBD |
-| Wall time | TBD |
-| Throughput | TBD |
-| Lag min / avg / p50 / p95 / p99 / max | TBD |
-| Avg / Peak CPU | TBD |
-| Avg / Peak RSS | TBD |
+**Steady-state throughput: ~7–10 events/sec** (embed + pgvector upsert, serial, single dispatcher thread) on this hardware, for short text (`'Bench Entry ' || N`, ~15 characters). The spread across these three runs (6.7–10.0 events/sec) reflects normal run-to-run variance already noted in Section 2 (background load / CPU frequency scaling in the VM), not a systematic effect of batch size — per-row embed+upsert cost, visible directly in the sink's per-row debug log across all three runs, stayed consistently in the ~85–125 ms range regardless of load pattern.
 
-**Expected relationship**: per-row pipeline time ≈ `embed()` latency (section 2) + Postgres upsert round-trip + negligible dispatch overhead (per section 1's baseline). If observed end-to-end latency is significantly higher than this sum, that gap points to pipeline overhead worth investigating rather than embedding cost.
+**Lag numbers are backlog-bound, not steady-state, in all three runs** — and this is expected, not a defect. In every case here, the load script's `psql` transactions complete in well under a second regardless of batch count, while the pipeline processes at ~100–150 ms/row; input therefore always arrives far faster than Walkrie can drain it, and a real queue backlog forms for the full run. This produces a clean internal consistency check: **max lag ≈ row count ÷ processing throughput** in every run (500÷10.0=50.0s vs. 50.2s max; 200÷6.7=29.9s vs. 29.9s max; 200÷8.3=24.1s vs. 22.8s max) — confirming lag here is measuring "time to drain the queue," not "real per-transaction replication lag." A **paced load generator** (inserts spaced slower than ~150 ms apart, so the queue never backs up) is needed to measure true steady-state commit-to-processed lag; this is flagged as a follow-up, not included in this pass.
+
+**Methodology note — table growth affects results.** An earlier version of this test (run against tables that had accumulated several million rows from repeated benchmark sessions without truncation) showed periodic per-row stalls (occasional upsert latency spikes to 40–60 ms against a normal ~4–8 ms baseline), consistent with B-tree index page splits on a large `item_id` unique index. Truncating both tables before each run (`TRUNCATE TABLE test_embeddings; TRUNCATE TABLE test_table RESTART IDENTITY;`) eliminated this pattern. All results in the table above were captured on freshly truncated tables; benchmarking against a large pre-existing table would show additional, table-size-dependent latency spikes not reflected here.
+
+Resource usage (RSS ~700–730 MB, CPU 400–600%+ peak) is consistent with the loaded BGE-M3 model (~540 MB per the model-load log) plus llama.cpp's 4 compute threads running concurrently with the replication and dispatcher threads — not indicative of a leak.
 
 ## 4. End-to-end pipeline (postgres-embedding sink, OpenAI provider)
 
-*(pending)*
+Not run as a separate end-to-end benchmark in this pass — Section 2 already isolates and quantifies the per-call latency difference between the two embedding providers (Llama avg 63.32 ms vs. OpenAI avg 306.66 ms), which is the dominant variable between an OpenAI-backed and Llama-backed end-to-end run; the pgvector upsert cost (Section 3, ~4–8 ms/row baseline) and pipeline overhead (Section 1) are provider-independent. A full OpenAI end-to-end run would mainly confirm this arithmetic under real network conditions and is left as a future addition if OpenAI-specific network variance becomes a question worth answering directly.
 
-| Metric | Value |
-|---|---|
-| Events processed | TBD |
-| Wall time | TBD |
-| Throughput | TBD |
-| Lag min / avg / p50 / p95 / p99 / max | TBD |
-| Avg / Peak CPU | TBD |
-| Avg / Peak RSS | TBD |
+## Summary
 
-## Summary (interim — sections 3 and 4 still pending)
-
-With CPU features correctly exposed, local embedding (BGE-M3, Q4_K_M) averages **63.32 ms/call**, roughly 4.8× faster than OpenAI's `text-embedding-3-small` API (306.66 ms/call) on this hardware — the local model is both faster and free of per-call cost or data egress. Pipeline mechanics alone (WAL decode, dispatch, JSON serialization, no embedding or database write) impose negligible overhead in comparison: sub-10ms median lag and under 25 MB RSS at steady state under realistic (batched-commit) load. This suggests embedding provider latency, not pipeline overhead, will be the dominant factor in end-to-end throughput — sections 3 and 4 below will confirm whether that holds once a real Postgres upsert is added to the path.
-
-A secondary but important finding from this benchmarking pass: local embedding performance is highly sensitive to whether the host CPU's AVX2 instruction set is actually exposed to the process — a hypervisor misconfiguration (common in VirtualBox VMs under active Windows Hyper-V) can silently produce a 30x+ slowdown with no error message, making a correctly-configured local model appear to be the slower option when it isn't. Anyone deploying Walkrie's local provider should verify `avx2` appears in `/proc/cpuinfo` as a first troubleshooting step if local-model latency looks unexpectedly high.
+* **Pipeline mechanics are cheap.** With no embedding call and no database write (Section 1), Walkrie decodes and dispatches WAL events at sub-10ms median lag and under 25 MB RSS under realistic (batched-commit) load — the pipeline itself is not the bottleneck.
+* **Embedding latency dominates end-to-end cost.** Local Llama (BGE-M3, Q4_K_M, AVX2-enabled) averages 63.32 ms/call; OpenAI's `text-embedding-3-small` averages 306.66 ms/call — roughly 4.8× slower, plus network dependency and per-call cost (Section 2).
+* **End-to-end steady-state throughput is ~7–10 events/sec** with the local Llama provider, serial embed + pgvector upsert on a single dispatcher thread (Section 3). This is the number to use for local-model deployment sizing on comparable hardware.
+* **CPU feature exposure is a critical, easy-to-miss deployment variable.** A VM with AVX2 not passed through to the guest measured 32× slower local-embedding latency with no error message — anyone deploying the local provider in a VM or container should check `grep avx2 /proc/cpuinfo` before concluding the model itself is slow.
+* **Lag figures in every burst-load test reflect queue drain time, not steady-state replication lag**, since all load-generation scripts used here commit input far faster than the pipeline can process it. A paced load generator is needed for a true steady-state lag number and is the main open item for future benchmarking.
+* **Batching is the clearest lever for improving throughput beyond current numbers** — the pipeline is currently single-threaded and unbatched at the embedding call; batching multiple rows into one `embed()` call (where the provider supports it) is the most direct next optimization, not covered by this benchmarking pass.

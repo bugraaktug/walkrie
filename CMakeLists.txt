@@ -132,6 +132,14 @@ target_include_directories(embedding_bench PRIVATE
 )
 target_link_libraries(embedding_bench PRIVATE walkrie_core)
 #
+add_executable(pg_upsert_bench src/bench/pg_upsert_bench.cpp)
+target_include_directories(pg_upsert_bench PRIVATE
+    src
+    src/include
+    src/third_party
+)
+target_link_libraries(pg_upsert_bench PRIVATE walkrie_core)
+#
 
 enable_testing()
 add_test(NAME unit_tests COMMAND walkrie_tests)

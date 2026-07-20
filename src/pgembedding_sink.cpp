@@ -100,7 +100,8 @@ void PgEmbeddingSink::call(const ChangeEvent& event) {
                 return;
             }
             upsert(*tm, id_val, embed_val, meta_vals, vec);
-	        break;
+
+            break;
         }
         case ChangeEvent::Op::Update: {
             spdlog::debug("[PgEmbeddingSink] update event received - {}", event.table_name);
