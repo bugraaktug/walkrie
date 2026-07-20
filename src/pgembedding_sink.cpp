@@ -100,7 +100,6 @@ void PgEmbeddingSink::call(const ChangeEvent& event) {
                 return;
             }
             upsert(*tm, id_val, embed_val, meta_vals, vec);
-
             break;
         }
         case ChangeEvent::Op::Update: {
