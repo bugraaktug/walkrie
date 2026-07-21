@@ -1,9 +1,9 @@
 # walkrie config
-# Usage: ./walkrie -f -c /path/to/config.toml
+# Pass path to this file as the only CLI arg: ./walkrie -f -c /path/to/config.toml
 
 [app]
-log_level = "debug"   # trace / debug / info / warn / error / critical
-log_file  = "/tmp/logs/walkrie.log"
+log_level = "info"   # trace / debug / info / warn / error / critical
+log_file  = "/var/log/walkrie/walkrie.log"
 log_max_size_mb  = 10
 log_max_files    = 5
 
@@ -40,7 +40,12 @@ embed_column 	= "embedding"
 
 [embedding]
 provider   = "llama"
-model_path = "/home/debian/models/bge-m3/bge-m3-Q4_K_M.gguf"
+# If llama is used as provider then 
+# place your GGUF model file in /var/lib/walkrie/models/ before starting
+# the service — this directory is created automatically but is NOT
+# populated by the package (model files are large and licensed
+# separately). See README.md for download instructions.
+model_path = "/var/lib/walkrie/models/bge-m3-Q4_K_M.gguf"
 api_key    = ""
 dimensions = 1024
 n_threads  = 4

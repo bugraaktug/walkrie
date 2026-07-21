@@ -36,12 +36,12 @@ pkg_check_modules(LIBEVENT REQUIRED libevent)
 # unless explicitly requested. Set LLAMA_DIR on the cmake command line if
 # your checkout is somewhere other than ~/llama.cpp:
 #   cmake -DLLAMA_DIR=/path/to/llama.cpp ..
-set(LLAMA_DIR "$ENV{HOME}/llama.cpp" CACHE PATH "Path to llama.cpp source checkout")
+set(LLAMA_DIR "${CMAKE_SOURCE_DIR}/third_party/llama.cpp" CACHE PATH "Path to llama.cpp source checkout")
 # Disable everything in llama.cpp we don't need — keeps build times down
 set(LLAMA_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
-#set(BUILD_SHARED_LIBS    OFF CACHE BOOL "" FORCE) ##
+set(BUILD_SHARED_LIBS    OFF CACHE BOOL "" FORCE) ##
 
 add_subdirectory(${LLAMA_DIR} ${CMAKE_BINARY_DIR}/llama_build EXCLUDE_FROM_ALL)
 
@@ -144,3 +144,9 @@ target_link_libraries(pg_upsert_bench PRIVATE walkrie_core)
 
 enable_testing()
 add_test(NAME unit_tests COMMAND walkrie_tests)
+
+# -- packaging --
+# Add install rules (needed for `make install` / packaging):
+install(TARGETS walkrie RUNTIME DESTINATION bin)
+install(FILES config_sample.toml DESTINATION share/walkrie RENAME config.toml.example)
+

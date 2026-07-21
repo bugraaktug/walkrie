@@ -1,0 +1,6 @@
+#debian/tmp/usr/bin/walkrie usr/bin
+#config_sample.toml etc/walkrie/config.toml
+#debian/walkrie.tmpfiles usr/lib/tmpfiles.d/walkrie.conf
+README.md usr/share/doc/walkrie/
+TECHNICAL.md usr/share/doc/walkrie/
+PERFORMANCE.md usr/share/doc/walkrie/

@@ -1,0 +1,31 @@
+[Unit]
+Description=Walkrie — PostgreSQL WAL to vector embedding sync engine
+After=network.target postgresql.service
+Documentation=file:///usr/share/doc/walkrie/README.md
+
+[Service]
+Type=simple
+User=walkrie
+Group=walkrie
+ExecStart=/usr/bin/walkrie -f -c /etc/walkrie/config.toml --pid-file /run/walkrie/walkrie.pid
+Restart=on-failure
+RestartSec=5
+
+# systemd creates, owns, and cleans up these directories automatically —
+# no manual mkdir/chown needed in postinst for the systemd-managed path.
+RuntimeDirectory=walkrie
+RuntimeDirectoryMode=0750
+LogsDirectory=walkrie
+LogsDirectoryMode=0750
+StateDirectory=walkrie
+StateDirectoryMode=0750
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/walkrie /var/lib/walkrie /run/walkrie
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

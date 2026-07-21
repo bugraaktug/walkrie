@@ -1,0 +1,23 @@
+#!/usr/bin/make -f
+
+export DH_VERBOSE = 1
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+	git submodule update --init --recursive
+	dh_auto_configure -- \
+		-DCMAKE_BUILD_TYPE=RelWithDebInfo \
+		-DLLAMA_DIR=$(CURDIR)/third_party/llama.cpp \
+		-DBUILD_SHARED_LIBS=OFF
+
+override_dh_auto_install:
+	dh_auto_install
+	install -D -m 0644 config_sample.toml debian/walkrie/etc/walkrie/config.toml
+
+override_dh_auto_test:
+	# Skip tests during package build for now — walkrie_tests needs a
+	# live Postgres connection for several suites, which isn't available
+	# in a clean build environment (sbuild/pbuilder have no network/DB).
+	# Revisit once test suite has a mocked-DB path for CI/packaging.

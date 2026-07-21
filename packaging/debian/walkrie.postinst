@@ -1,0 +1,35 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        if ! getent group walkrie >/dev/null; then
+            addgroup --system walkrie
+        fi
+        if ! getent passwd walkrie >/dev/null; then
+            adduser --system --ingroup walkrie --home /nonexistent \
+                    --no-create-home --disabled-login \
+                    --gecos "Walkrie CDC daemon" walkrie
+        fi
+
+        # /var/log/walkrie and /var/lib/walkrie are normally created by
+        # systemd's LogsDirectory=/StateDirectory= on first start, but we
+        # set ownership here too so `models/` (created by .dirs) and the
+        # config file are correct even before the service's first run.
+        chown -R walkrie:walkrie /var/lib/walkrie 2>/dev/null || true
+
+        chown root:walkrie /etc/walkrie/config.toml
+        chmod 640 /etc/walkrie/config.toml
+        # Contains DB credentials and possibly an API key — group-readable
+        # by walkrie only, not world-readable.
+
+        deb-systemd-helper unmask walkrie.service >/dev/null || true
+        if [ -z "$2" ]; then
+            deb-systemd-helper enable walkrie.service >/dev/null || true
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

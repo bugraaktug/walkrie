@@ -1,0 +1,2 @@
+# debian/walkrie.tmpfiles → installed to /usr/lib/tmpfiles.d/walkrie.conf
+d /run/walkrie 0750 walkrie walkrie -

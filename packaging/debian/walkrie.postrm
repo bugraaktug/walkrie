@@ -1,0 +1,20 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    purge)
+        rm -rf /var/log/walkrie
+        rm -rf /var/lib/walkrie
+        rm -rf /etc/walkrie
+        if getent passwd walkrie >/dev/null; then
+            deluser --system walkrie >/dev/null || true
+        fi
+        if getent group walkrie >/dev/null; then
+            delgroup --system walkrie >/dev/null || true
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

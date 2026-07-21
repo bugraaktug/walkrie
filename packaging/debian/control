@@ -1,0 +1,30 @@
+Source: walkrie
+Section: database
+Priority: optional
+Maintainer: bugra <bugraaktug@gmail.com>
+Build-Depends: debhelper-compat (= 13),
+               cmake (>= 3.16),
+               g++ (>= 11),
+               libpq-dev,
+               libevent-dev,
+               libcurl4-openssl-dev,
+               nlohmann-json3-dev,
+               git
+Standards-Version: 4.6.2
+Homepage: https://github.com/bugraaktug/walkrie
+Rules-Requires-Root: no
+
+Package: walkrie
+Architecture: amd64
+Depends: ${shlibs:Depends}, ${misc:Depends},
+         libpq5,
+         libevent-2.1-7,
+         libcurl4
+Description: PostgreSQL WAL to vector embedding sync engine
+ Walkrie streams PostgreSQL logical replication changes into
+ pgvector embeddings in real time, using local (llama.cpp) or
+ remote (OpenAI) embedding providers. No external message broker
+ required.
+ .
+ This is an early alpha release — see /usr/share/doc/walkrie/PERFORMANCE.md
+ for current benchmark numbers and known limitations.

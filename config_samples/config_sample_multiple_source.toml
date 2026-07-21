@@ -1,7 +1,5 @@
 # walkrie config
-# Pass path to this file as the only CLI arg: ./walkrie /path/to/config.toml
-# walkrie config
-# Usage: ./walkrie /path/to/config.toml
+# Usage: ./walkrie -f -c /path/to/config.toml
 
 [app]
 log_level = "debug"   # trace / debug / info / warn / error / critical

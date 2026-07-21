@@ -1,0 +1,12 @@
+walkrie (1.0.1~alpha1-1) unstable; urgency=low
+
+  * Initial alpha release.
+  * Real-time WAL streaming via native logical replication.
+  * Local (llama.cpp) and OpenAI embedding providers.
+  * postgres-embedding and json-output sink types.
+  * Static discriminator support for multi-source sink tables.
+  * Known limitation: single-threaded, unbatched embedding calls —
+    See PERFORMANCE.md. Batching is planned for
+    a future release.
+
+ -- bugra <bugraaktug@gmail.com>  Mon, 20 Jul 2026 12:00:00 +0300

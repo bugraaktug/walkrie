@@ -1,3 +1,11 @@
 /build/
 *.swp
 *openai*.toml
+# dpkg-buildpackage artifacts (written through the debian/ symlink into packaging/debian/)
+packaging/debian/walkrie/
+packaging/debian/.debhelper/
+packaging/debian/files
+packaging/debian/*.substvars
+packaging/debian/*.log
+packaging/debian/debhelper-build-stamp
+obj-x86_64-linux-gnu/

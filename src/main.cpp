@@ -36,7 +36,7 @@ void print_usage(const char* argv0)
         << "  -c, --config <path>    path to config.toml (required)\n"
         << "  -f, --foreground       run in the foreground; do not daemonize\n"
         << "                         (use this under systemd — see walkrie.service)\n"
-        << "      --pid-file <path> PID file path when daemonizing (default: /tmp/walkrie.pid)\n"
+        << "      --pid-file <path> PID file path when daemonizing (default: /run/walkrie/walkrie.pid)\n"
         << "  -h, --help              show this message\n";
 }
 

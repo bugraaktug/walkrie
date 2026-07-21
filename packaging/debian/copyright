@@ -1,0 +1,14 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: walkrie
+Source: https://github.com/bugraaktug/walkrie
+
+Files: *
+Copyright: 2026 Bugra
+License: [Actual license and terms.]
+
+Files: third_party/llama.cpp/*
+Copyright: The ggml/llama.cpp contributors
+License: MIT
+
+Files: src/third_party/*
+Copyright: [vendored header-only library — spdlog, toml++, nlohmann-json, moodycamel each have their own license reference ]

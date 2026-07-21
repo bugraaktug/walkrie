@@ -1,5 +1,4 @@
 # pgcdc / walkrie config
-# Pass path to this file as the only CLI arg: ./walkrie /path/to/config.toml
 
 [app]
 log_level = "debug"   # trace / debug / info / warn / error / critical

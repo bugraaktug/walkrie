@@ -1,11 +1,9 @@
 # walkrie config
-# Pass path to this file as the only CLI arg: ./walkrie /path/to/config.toml
-# walkrie config
-# Usage: ./walkrie /path/to/config.toml
+# Usage: ./walkrie -f -c /path/to/config.toml
 
 [app]
 log_level = "info"   # trace / debug / info / warn / error / critical
-log_file  = "/var/log/walkrie/walkrie.log"
+log_file  = "/tmp/logs/walkrie.log"
 log_max_size_mb  = 10
 log_max_files    = 5
 
