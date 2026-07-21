@@ -15,7 +15,7 @@ namespace pgcdc
 struct AppSettings 
 {
     std::string log_level        = "info";
-    std::string log_file         = "/tmp/logs/walkrie.log";
+    std::string log_file         = "/var/log/walkrie/walkrie.log";
     int         log_max_size_mb  = 10;
     int         log_max_files    = 5;
 };

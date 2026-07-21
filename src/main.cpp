@@ -1,19 +1,75 @@
 #include <iostream>
 #include <memory>
 #include <vector>
+#include <csignal>
+#include <getopt.h>
+
 #include <event2/event.h>
 #include <spdlog/spdlog.h>
 #include <spdlog/async.h> // Required for async thread pool
 #include <spdlog/sinks/rotating_file_sink.h>
 
 #include "config.hpp"
+#include "daemon_utils.hpp"
 #include "event_dispatcher.hpp"
 #include "http_client.hpp"
 #include "pgembedding_sink.hpp"
 #include "pgreplication_source.hpp"
 #include "readerwriterqueue.hpp"
 
-void init_logger(const pgcdc::AppSettings& settings) {
+namespace 
+{
+
+struct Options 
+{
+    std::string config_path;
+    std::string pid_file = "/run/walkrie/walkrie.pid";
+    bool foreground = false;
+    bool show_help = false;
+};
+
+void print_usage(const char* argv0) 
+{
+    std::cerr
+        << "usage: " << argv0 << " -c <config.toml> [-f] [--pid-file <path>]\n"
+        << "\n"
+        << "  -c, --config <path>    path to config.toml (required)\n"
+        << "  -f, --foreground       run in the foreground; do not daemonize\n"
+        << "                         (use this under systemd — see walkrie.service)\n"
+        << "      --pid-file <path> PID file path when daemonizing (default: /tmp/walkrie.pid)\n"
+        << "  -h, --help              show this message\n";
+}
+
+Options parse_args(int argc, char** argv) 
+{
+    Options opts;
+
+    static struct option long_opts[] = {
+        {"config",    required_argument, nullptr, 'c'},
+        {"foreground", no_argument,      nullptr, 'f'},
+        {"pid-file",  required_argument, nullptr, 'p'},
+        {"help",      no_argument,       nullptr, 'h'},
+        {nullptr, 0, nullptr, 0}
+    };
+
+    int c;
+    while ((c = getopt_long(argc, argv, "c:fh", long_opts, nullptr)) != -1) {
+        switch (c) {
+            case 'c': opts.config_path = optarg; break;
+            case 'f': opts.foreground = true; break;
+            case 'p': opts.pid_file = optarg; break;
+            case 'h': opts.show_help = true; break;
+            default:
+                print_usage(argv[0]);
+                std::exit(1);
+        }
+    }
+    return opts;
+}
+}
+
+void init_logger(const pgcdc::AppSettings& settings) 
+{
     try {
         spdlog::init_thread_pool(8192, 1);
         auto async_file_logger = spdlog::create_async<spdlog::sinks::rotating_file_sink_mt> (
@@ -31,28 +87,41 @@ void init_logger(const pgcdc::AppSettings& settings) {
                      settings.log_level, 
                      settings.log_file);
     } catch (const spdlog::spdlog_ex& e) {
-        std::cerr << "Walkrie log initialization failed %s\n: " << e.what() << "\n";
+        std::cerr << "Walkrie log initialization failed " << e.what() << "\n";
     }
 }
 
+struct SignalHandle 
+{
+    event_base* base;
+    std::string pid_file;
+    bool daemonized;
+};
+
+void on_shutdown_signal(evutil_socket_t sig, short, void* arg) 
+{
+    auto* ctx = static_cast<SignalHandle*>(arg);
+    spdlog::info("Walkrie received signal {} — shutting down", sig);
+    event_base_loopbreak(ctx->base);
+}
 
 int main(int argc, char** argv) 
 {
-    if (argc != 2) {
-        std::cerr << "usage: " << argv[0] << " <config.toml>\n"
-                  << "example: " << argv[0] << " /etc/walkrie/config.toml\n";
-        return 1;
+    Options opts = parse_args(argc, argv);
+
+    if (opts.show_help || opts.config_path.empty()) {
+        print_usage(argv[0]);
+        return opts.show_help ? 0 : 1;
     }
 
     pgcdc::AppConfig cfg;
     try {
-        cfg = pgcdc::load_config(argv[1]);
+        cfg = pgcdc::load_config(opts.config_path);
     } catch (const std::exception& e) {
         std::cerr << "error: " << e.what() << "\n";
         return 1;
     }
 
-    init_logger(cfg.settings);
     auto errors = cfg.validate();
     if (!errors.empty()) {
         std::cerr << "[Configuration] config validation failed:\n";
@@ -62,7 +131,15 @@ int main(int argc, char** argv)
         }
         return 1;
     }
+    
+    if (!opts.foreground) {
+        pgcdc::daemonize(opts.pid_file);
+    }
 
+    signal(SIGPIPE, SIG_IGN);
+
+    init_logger(cfg.settings);
+    
     pgcdc::http_global_init();
     event_base* base = event_base_new();
     if (!base) {
@@ -70,7 +147,15 @@ int main(int argc, char** argv)
         return 1;
     }
     
-    pgcdc::EventDispatcher dispatcher; 
+    // Graceful shutdown on SIGTERM (systemctl stop / kill) and SIGINT
+    // (Ctrl-C in foreground mode).
+    SignalHandle sig_hnd{ base, opts.pid_file, !opts.foreground };
+    event* sigterm_ev = evsignal_new(base, SIGTERM, on_shutdown_signal, &sig_hnd);
+    event* sigint_ev  = evsignal_new(base, SIGINT,  on_shutdown_signal, &sig_hnd);
+    event_add(sigterm_ev, nullptr);
+    event_add(sigint_ev, nullptr);
+
+    auto dispatcher = std::make_unique<pgcdc::EventDispatcher>();  
     
     std::vector<std::unique_ptr<pgcdc::PgReplicationSource>> sources;
     for (const auto& src : cfg.sources) {
@@ -95,7 +180,7 @@ int main(int argc, char** argv)
 	    pgcdc::EventJob job;
 	    job.ev = event;
 	    job.sinks = sinks;
-	    dispatcher.post_job(std::move(job));
+	    dispatcher->post_job(std::move(job));
     };
 
     for (auto& source : sources) {
@@ -121,11 +206,11 @@ int main(int argc, char** argv)
         }
     }
 
-    std::cout << "Walkrie system running..." << "\n";
-    std::cerr << "Running event loop for " << sources.size() << " source(s)... (Ctrl-C to stop)\n";
-    
-    spdlog::info("Walkrie system running...");
-    spdlog::info("Running event loop for - {} source(s)...(Ctrl-C to stop)", sources.size());
+    spdlog::info("Walkrie system running — {} source(s), pid={}", sources.size(), getpid());
+    if (opts.foreground) {
+        std::cout << "Walkrie running in foreground (pid=" << getpid()
+                  << "). Ctrl-C or SIGTERM to stop.\n";
+    }
     
     event_base_dispatch(base);
 
@@ -133,11 +218,21 @@ int main(int argc, char** argv)
         spdlog::info("Finalizing source streaming - {}", source->last_error());
     }
 
+    sources.clear();
+    event_free(sigterm_ev);
+    event_free(sigint_ev);
     event_base_free(base);
     
     pgcdc::http_global_cleanup();
+    if (!opts.foreground) {
+        pgcdc::remove_pid_file(opts.pid_file);
+    }
+
+    dispatcher.reset();
+    sinks.clear();
+
+    spdlog::info("Walkrie shutdown complete.");
     spdlog::shutdown();
     
-    spdlog::info("Walkrie system shutting down...");
     return 0;
 }

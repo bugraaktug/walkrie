@@ -57,6 +57,7 @@ link_directories(${PG_LIB_DIR} ${LIBEVENT_LIBRARY_DIRS})
 # --- shared core library ---
 add_library(walkrie_core STATIC
     src/byte_utils.cpp
+    src/daemon_utils.cpp
     src/wal_frame.cpp
     src/event_dispatcher.cpp
     src/http_client.cpp

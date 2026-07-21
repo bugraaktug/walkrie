@@ -254,7 +254,7 @@ dimensions = 1536
 ## Execution
 
 ```bash
-./walkrie ../config_sample.toml
+./walkrie -f -c ../config_sample.toml
 ```
 
 ## Vector Indexing (Operator Responsibility)
