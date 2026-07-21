@@ -101,6 +101,7 @@ add_executable(walkrie_tests
     src/tests/test_main.cpp
     src/tests/test_event_dispatcher.cpp
     src/tests/test_config.cpp
+    src/tests/test_config_model.cpp
     src/tests/test_upsert_sql.cpp
     src/tests/test_xframe_log.cpp
     src/tests/test_parser.cpp
