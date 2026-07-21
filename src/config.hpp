@@ -1,9 +1,11 @@
 #pragma once
 
+#include <algorithm>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <unistd.h>  
 #include <vector>
-#include <algorithm>
 
 #include <toml.hpp>
 
@@ -123,6 +125,28 @@ struct AppConfig
         if (embedding.provider == "llama") {
             if (embedding.model_path.empty()) {
                 errors.push_back("[embedding] model_path is required when provider = 'llama'");
+            } else {
+                namespace fs = std::filesystem;
+                std::error_code ec;
+
+                if (!fs::exists(embedding.model_path, ec)) {
+                    errors.push_back("[embedding] model_path does not exist: '" +
+                                    embedding.model_path + "' — place a GGUF model file at this "
+                                    "path before starting walkrie (see README.md for download "
+                                    "instructions)");
+                } else if (!fs::is_regular_file(embedding.model_path, ec)) {
+                    errors.push_back("[embedding] model_path exists but is not a regular file: '" +
+                                    embedding.model_path + "'");
+                } else if (access(embedding.model_path.c_str(), R_OK) != 0) {
+                    errors.push_back("[embedding] model_path exists but is not readable by the "
+                                    "current user: '" + embedding.model_path +
+                                    "' — check file ownership/permissions (the walkrie service "
+                                    "runs as the 'walkrie' system user)");
+                } else if (fs::file_size(embedding.model_path, ec) == 0) {
+                    errors.push_back("[embedding] model_path points to an empty (0-byte) file: '" +
+                                    embedding.model_path + "' — the download may have failed or "
+                                    "been interrupted");
+                }
             }
 	        if (embedding.dimensions <= 0) {
                 errors.push_back("[embedding] dimensions must be > 0");

@@ -2,6 +2,8 @@
 Description=Walkrie — PostgreSQL WAL to vector embedding sync engine
 After=network.target postgresql.service
 Documentation=file:///usr/share/doc/walkrie/README.md
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple

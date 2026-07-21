@@ -171,9 +171,24 @@ int main(int argc, char** argv)
     }
 
     std::vector<std::shared_ptr<pgcdc::EventSink>> sinks;
-    for (const auto& sink_instance : cfg.sinks) {
-        auto sink = sink_instance->create_sink(cfg.embedding);
-        sinks.push_back(sink);
+    try {
+        for (const auto& sink_instance : cfg.sinks) {
+            auto sink = sink_instance->create_sink(cfg.embedding);
+            sinks.push_back(sink);
+        }
+    } catch (const std::exception& e) {
+        spdlog::critical("Fatal: failed to initialize sink/embedding provider: {}", e.what());
+        dispatcher.reset();
+        event_free(sigterm_ev);
+        event_free(sigint_ev);
+        event_base_free(base);
+        
+        pgcdc::http_global_cleanup();
+        if (!opts.foreground) {
+            pgcdc::remove_pid_file(opts.pid_file);
+        }
+        spdlog::shutdown();
+        return 1;
     }
 
     auto dispatch_handle = [&](const pgcdc::ChangeEvent& event) {
