@@ -44,13 +44,14 @@ Walkrie ships as a `.deb` package. After installing:
 
 ```bash
 sudo dpkg -i walkrie_1.0.1~alpha1-1_amd64.deb
+sudo apt install -f   # resolve any missing runtime dependencies
+```
+
 ## Verifying your download
 
 ```bash
 sha256sum walkrie_1.0.1~alpha1-1_amd64.deb
 # expected: e725bb04884658bcb069d91d5fcd68b5ab210bbff0523c662113a70a14c89152
-```
-sudo apt install -f   # resolve any missing runtime dependencies
 ```
 
 The package creates a dedicated `walkrie` system user, installs a systemd unit (enabled but **not started** — see below), and creates:
