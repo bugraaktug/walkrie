@@ -22,26 +22,59 @@ Most CDC-to-vector pipelines today are built from general-purpose tools (Debeziu
 * **Real-time WAL streaming** via native logical replication slot listener.
 * **Multi-table mapping** — configure multiple source tables, each with independent column mappings, in a single config file. Multiple sources can share one sink table using a static discriminator label, so overlapping IDs across tables never collide.
 * **OpenAI & local Llama integrations** — switch embedding provider via a single config field.
-* **Pre-flight data validation layer** (null/duplicate filtering before embedding calls).
+* **Skip-unchanged & null-safety checks** — update events skip re-embedding when the source text didn't actually change (TOAST-unchanged column, or identical old/new value), and rows with a missing id or embed value are dropped before any embedding call — avoiding wasted API/inference cost on no-op updates.
 * **Upsert-based sink writes** — idempotent by design; replays and reconnects don't duplicate rows.
+* **Config validation at startup** — required fields, embedding provider settings, and (for the local Llama provider) the model file's existence, type, readability, and non-zero size are all checked before the daemon starts, so misconfiguration produces a clear error message instead of a crash loop.
+* **Foreground and daemon modes** — run under systemd (`-f` foreground) or as a classic detached daemon (double-fork, PID file, signal-based graceful shutdown on SIGTERM/SIGINT).
 
 ## Roadmap
 
-* Batched embedding API requests (currently one HTTP call per row for OpenAI provider).
+* Batched embedding requests — process multiple rows per `embed()` call (both local Llama batching and OpenAI's batched input API) to substantially improve throughput beyond today's single-threaded, one-row-at-a-time baseline.
 * Vector index management helpers (HNSW index creation/verification on sink tables).
-* Published performance benchmarks (throughput, replication lag, memory footprint) under real load.
+* Multi-threaded embedding worker pool (multiple `llama_context` instances sharing one loaded model) to use more available CPU cores concurrently.
 
 ## Target Customers
 
 * **Teams running RAG or semantic search on top of an existing Postgres database** who want embeddings to stay current without building and maintaining a custom sync pipeline.
 * **Resource-constrained engineering teams** who want a single lightweight binary instead of standing up Kafka or a scripted batch job to keep a vector store in sync.
 
+## Installation (Debian/Ubuntu)
+
+Walkrie ships as a `.deb` package. After installing:
+
+```bash
+sudo dpkg -i walkrie_1.0.1~alpha1-1_amd64.deb
+sudo apt install -f   # resolve any missing runtime dependencies
+```
+
+The package creates a dedicated `walkrie` system user, installs a systemd unit (enabled but **not started** — see below), and creates:
+
+| Path | Purpose |
+|---|---|
+| `/etc/walkrie/config.toml` | Configuration file (edit this before starting) |
+| `/var/lib/walkrie/models/` | Place your local embedding model (`.gguf`) file here |
+| `/var/log/walkrie/` | Log output |
+| `/run/walkrie/walkrie.pid` | PID file (systemd-managed) |
+
+**The package does not bundle a model file** — it must be downloaded separately (models are multi-gigabyte and licensed independently of Walkrie). See [TECHNICAL.md](./TECHNICAL.md#model-installation) for download instructions.
+
+Before starting the service:
+1. Place a compatible GGUF model at `/var/lib/walkrie/models/` (if using the local Llama provider), and ensure it's readable by the `walkrie` user.
+2. Edit `/etc/walkrie/config.toml` with real database credentials and (if applicable) your model path or OpenAI API key.
+3. Start the service:
+   ```bash
+   sudo systemctl start walkrie
+   sudo systemctl status walkrie
+   journalctl -u walkrie -f
+   ```
+
+If `config.toml` is invalid or the model file is missing/unreadable, `walkrie` will refuse to start and log a clear, specific error rather than crash-looping.
+
 ## Security & Deployment
 
-Walkrie runs entirely within your own infrastructure. Database credentials, replicated data, and schema details stay local to wherever you deploy the binary — nothing is sent to any third party. 
+Walkrie runs entirely within your own infrastructure. Database credentials, replicated data, and schema details stay local to wherever you deploy the binary — nothing is sent to any third party.
 If you configure the OpenAI embedding provider, only the specific text fields you've mapped for embedding are sent to OpenAI's API, under OpenAI's own data handling terms — Walkrie itself does not collect or transmit any data.
 
 ---
 
 Licensed under a Developer-First Commercial License. Built by a solo developer for engineers who care about mechanical sympathy.
-
