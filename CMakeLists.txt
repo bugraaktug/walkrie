@@ -141,7 +141,11 @@ target_include_directories(pg_upsert_bench PRIVATE
     src/third_party
 )
 target_link_libraries(pg_upsert_bench PRIVATE walkrie_core)
-#
+
+# --- demo ---
+add_executable(candidate_search demo/candidate_search_tool.cpp)
+target_include_directories(candidate_search PRIVATE src src/include src/third_party)
+target_link_libraries(candidate_search PRIVATE walkrie_core)
 
 enable_testing()
 add_test(NAME unit_tests COMMAND walkrie_tests)

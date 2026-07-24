@@ -1,0 +1,59 @@
+[app]
+log_level = "debug"
+log_file  = "/tmp/logs/walkrie.log"
+log_max_size_mb  = 10
+log_max_files    = 5
+
+[[source]]
+host        = "localhost"
+port        = "5432"
+dbname      = "hr_demo"
+user        = "walkrie_demo"
+password    = "walkrie"
+slot_name   = "cv_cdc_slot"
+publication = "cv_pub"
+
+[[sink]]
+type            = "postgres-embedding"
+host            = "localhost"
+port            = "5432"
+dbname          = "hr_demo"
+user            = "walkrie_demo"
+password        = "walkrie"
+table           = "public.candidate_search"
+embed_column    = "embedding"
+
+ [[sink.table_mapping]]
+ source_table = "candidates"
+
+    [[sink.table_mapping.columns]]
+    source_column = "id"
+    sink_column   = "candidate_id"
+    role          = "id"
+
+    [[sink.table_mapping.columns]]
+    source_column = "cv_text"
+    sink_column   = "cv_text"
+    role          = "embed"
+
+    [[sink.table_mapping.columns]]
+    source_column = "full_name"
+    sink_column   = "full_name"
+    role          = "metadata"
+
+    [[sink.table_mapping.columns]]
+    source_column = "years_experience"
+    sink_column   = "years_experience"
+    role          = "metadata"
+
+    [[sink.table_mapping.columns]]
+    source_column = "location"
+    sink_column   = "location"
+    role          = "metadata"
+
+[embedding]
+provider   = "llama"
+model_path = "/home/debian/models/bge-m3/bge-m3-Q4_K_M.gguf"
+dimensions = 1024
+n_threads  = 4
+n_ctx      = 512
