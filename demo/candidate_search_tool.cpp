@@ -18,7 +18,7 @@
 // examples:
 //   ./candidate_search config_cv_demo.toml "senior backend engineer with postgres and docker experience"
 //
-//   ./candidate_search config_cv_demo.toml "senior backend engineer with postgres and docker experience --location Berlin --limit 5
+//   ./candidate_search config_cv_demo.toml "senior backend engineer with postgres and docker experience" --location Berlin --limit 5
 
 #include <iostream>
 #include <sstream>
