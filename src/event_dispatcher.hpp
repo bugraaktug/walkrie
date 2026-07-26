@@ -23,10 +23,15 @@ struct EventJob
 class EventDispatcher 
 {
 public:
-    EventDispatcher() : running_(true) {
+    explicit EventDispatcher(size_t max_batch_size = 1,
+                             std::chrono::milliseconds batch_timeout = std::chrono::milliseconds(50))
+        : running_(true)
+        , max_batch_size_(max_batch_size)
+        , batch_timeout_(batch_timeout)
+    {
         worker_thread_ = std::thread(&EventDispatcher::process_jobs, this);
     }
-    
+   
     ~EventDispatcher();
     EventDispatcher(const EventDispatcher&) = delete;
     EventDispatcher& operator=(const EventDispatcher&) = delete;
@@ -35,10 +40,14 @@ public:
 
 private:
     void process_jobs(); 
-    
+    void drain_remaining(); // process remining jobs on system stop etc
+
     moodycamel::BlockingReaderWriterQueue<EventJob> queue_;
     std::thread worker_thread_;
     std::atomic<bool> running_;
+
+    size_t max_batch_size_;
+    std::chrono::milliseconds batch_timeout_;
 };
 
 } // namespace 

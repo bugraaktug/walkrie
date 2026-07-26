@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
  
+#include "batch_event.hpp"
 #include "config.hpp"
 #include "embedding_provider.hpp"
 #include "event_sink.hpp"
@@ -33,7 +34,16 @@ public:
  
     void init() override;
     void call(const ChangeEvent& event) override;
+    void call_batch(const std::vector<ChangeEvent>& events) override;
 
+protected:
+    virtual bool upsert(const TableMapping& tm,
+		                const std::string& id_value,
+                        const std::string& embed_text,
+                        const std::vector<std::string>& metadata_values,
+                        const std::vector<float>& embedding);
+    virtual bool remove(const TableMapping& tm, const std::string& item_id);
+ 
 private:
     PgEmbeddingSinkConfig config_;
     std::shared_ptr<EmbeddingProvider> provider_;
@@ -42,13 +52,8 @@ private:
     std::unordered_map<std::string, std::string> delete_sql_list_;
     PGconn* pg_ = nullptr;
 
-
-    bool upsert(const TableMapping& tm,
-		        const std::string& id_value,
-                const std::string& embed_text,
-                const std::vector<std::string>& metadata_values,
-                const std::vector<float>& embedding);
-    bool remove(const TableMapping& tm, const std::string& item_id);
+    std::optional<BatchEvent> prepare_upsert(const TableMapping& tm,
+                                             const ChangeEvent& event);
     static std::string get_column(const DecodedRow& row, const std::string& col_name);
     static bool is_toast(const DecodedRow& row, const std::string& col_name);
 };

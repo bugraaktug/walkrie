@@ -1,0 +1,81 @@
+# walkrie config
+# Usage: ./walkrie -f -c /path/to/config.toml
+
+[app]
+log_level = "info"   # trace / debug / info / warn / error / critical
+log_file  = "/tmp/logs/walkrie.log"
+log_max_size_mb  = 10
+log_max_files    = 5
+batch_size       = 10
+batch_timeout_ms = 50
+
+[[source]]
+host        = "localhost"
+port        = "5432"
+dbname      = "qdb"
+user        = "quser"
+password    = "quser1234"
+slot_name   = "cdc_slot"
+publication = "test_pub"
+
+[[source]]
+host        = "localhost"
+port        = "5432"
+dbname      = "qdb"
+user        = "quser"
+password    = "quser1234"
+slot_name   = "pgcdc_slot"
+publication = "pgcdc_pub"
+
+[[sink]]
+type 	    = "json-output"
+output_type = "stdout"
+
+[[sink]]
+type 	    = "postgres-embedding"
+host     	= "localhost"
+port     	= "5432"
+dbname   	= "qdb"
+user     	= "quser"
+password 	= "quser1234"
+table    	= "public.test_embeddings_msource"
+embed_column 	= "embedding"
+
+ [[sink.table_mapping]]
+ source_table = "test_table"
+ discriminator_column = "category"
+ discriminator_label  = "test"
+ 
+    [[sink.table_mapping.columns]]
+    source_column = "id"
+    sink_column   = "item_id"
+    role          = "id"
+
+    [[sink.table_mapping.columns]]
+    source_column = "name"
+    sink_column   = "item_name"
+    role          = "embed"
+
+ [[sink.table_mapping]]
+ source_table = "documents"
+ discriminator_column = "category"
+ discriminator_label  = "documents"
+
+    [[sink.table_mapping.columns]]
+    source_column = "id"
+    sink_column   = "item_id"
+    role          = "id"
+
+    [[sink.table_mapping.columns]]
+    source_column = "body"
+    sink_column   = "item_name"
+    role          = "embed"
+
+
+[embedding]
+provider   = "llama"
+model_path = "/home/debian/models/bge-m3/bge-m3-Q4_K_M.gguf"
+api_key    = ""
+dimensions = 1024
+n_threads  = 4
+n_ctx      = 512

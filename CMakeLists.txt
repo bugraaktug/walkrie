@@ -96,9 +96,11 @@ target_link_libraries(walkrie_core PUBLIC
 add_executable(walkrie src/main.cpp)
 target_link_libraries(walkrie PRIVATE walkrie_core)
 
-# --- tests ---
+# --- unit tests ---
 add_executable(walkrie_tests
     src/tests/test_main.cpp
+    src/tests/test_batched_event_dispatcher.cpp
+    src/tests/test_pgembedding_sink_batch_ordering.cpp 
     src/tests/test_event_dispatcher.cpp
     src/tests/test_config.cpp
     src/tests/test_config_model.cpp
@@ -113,7 +115,15 @@ target_include_directories(walkrie_tests PRIVATE
 )
 target_link_libraries(walkrie_tests PRIVATE walkrie_core)
 
-# --- bench ---
+# --- integration tests ---
+add_executable(test_sink_batch_mode
+    src/tests/integration/test_sink_batch_mode.cpp)
+target_include_directories(test_sink_batch_mode PRIVATE 
+    src src/include src/third_party)
+target_link_libraries(test_sink_batch_mode PRIVATE 
+    walkrie_core)
+
+# --- end to end bench ---
 add_executable(walkrie_bench
     src/bench/walkrie_bench.cpp
     src/bench/resource_sampler.cpp
@@ -133,7 +143,16 @@ target_include_directories(embedding_bench PRIVATE
     src/third_party
 )
 target_link_libraries(embedding_bench PRIVATE walkrie_core)
-#
+
+add_executable(embedding_bench_batch src/bench/embedding_bench_batch.cpp)
+target_include_directories(embedding_bench_batch PRIVATE
+    src
+    src/include
+    src/third_party
+)
+target_link_libraries(embedding_bench_batch PRIVATE walkrie_core)
+
+# --- pgvector upsert bench ---
 add_executable(pg_upsert_bench src/bench/pg_upsert_bench.cpp)
 target_include_directories(pg_upsert_bench PRIVATE
     src

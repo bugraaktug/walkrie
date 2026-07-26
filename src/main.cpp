@@ -155,8 +155,10 @@ int main(int argc, char** argv)
     event_add(sigterm_ev, nullptr);
     event_add(sigint_ev, nullptr);
 
-    auto dispatcher = std::make_unique<pgcdc::EventDispatcher>();  
-    
+    auto dispatcher = std::make_unique<pgcdc::EventDispatcher>(
+            cfg.settings.batch_size,
+            std::chrono::milliseconds(cfg.settings.batch_timeout_ms));
+
     std::vector<std::unique_ptr<pgcdc::PgReplicationSource>> sources;
     for (const auto& src : cfg.sources) {
         pgcdc::PgReplicationConfig src_config;

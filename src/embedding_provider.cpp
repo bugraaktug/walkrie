@@ -24,4 +24,14 @@ std::shared_ptr<EmbeddingProvider> make_embedding_provider(const EmbeddingConfig
         "valid values: 'llama', 'openai'");
 }
 
+std::vector<std::vector<float>> EmbeddingProvider::embed_batch(const std::vector<std::string>& texts) 
+{
+    std::vector<std::vector<float>> results;
+    results.reserve(texts.size());
+    for (const auto& t : texts) {
+        results.push_back(embed(t));
+    }
+    return results;
+}
+
 } // namespace pgcdc

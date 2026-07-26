@@ -15,6 +15,7 @@ public:
 
     virtual void init() = 0;
     virtual std::vector<float> embed(const std::string& text) = 0;
+    virtual std::vector<std::vector<float>> embed_batch(const std::vector<std::string>& texts) ;
     // Number of dimensions this provider produces. Must match the
     // pgvector column size (1024 for BGE-M3, 1536 for OpenAI small).
     virtual int dimensions() const = 0;

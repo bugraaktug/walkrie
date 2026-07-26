@@ -72,6 +72,10 @@ HttpResponse HttpClient::post_json(const std::string& url,
     curl_easy_setopt(curl_, CURLOPT_WRITEFUNCTION, write_callback);
     curl_easy_setopt(curl_, CURLOPT_WRITEDATA, &resp.body);
     curl_easy_setopt(curl_, CURLOPT_TIMEOUT, static_cast<long>(timeout_secs_));
+    
+    curl_easy_setopt(curl_, CURLOPT_TCP_KEEPALIVE, 1L);
+    curl_easy_setopt(curl_, CURLOPT_TCP_KEEPIDLE, 60L);  // start probing after 60s idle
+    curl_easy_setopt(curl_, CURLOPT_TCP_KEEPINTVL, 10L); // probe every 10s after that
 
     CURLcode res = curl_easy_perform(curl_);
     curl_slist_free_all(headers);

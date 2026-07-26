@@ -60,120 +60,146 @@ void PgEmbeddingSink::init()
     spdlog::info("[PgEmbeddingSink] pg connection ok, pgvector present for {} table", config_.sink_table);
 }
 
-void PgEmbeddingSink::call(const ChangeEvent& event) {
-    const TableMapping* tm = nullptr;
-    for (const auto& m : config_.mappings) {
-        if (m.source_table == event.table_name) {
-            tm = &m;
-            break;
-        }
-    }
-    if (!tm) {
-        spdlog::warn("[PgEmbeddingSink] No mapping configured for - {}", event.table_name);
-        return;
+std::optional<BatchEvent> PgEmbeddingSink::prepare_upsert(const TableMapping& tm, 
+                                                          const ChangeEvent& event) 
+{
+    if (!event.new_row) {
+        spdlog::warn("[PgEmbeddingSink] {} event dropped, no new row received - {}",
+                      event.op == ChangeEvent::Op::Insert ? "insert" : "update",
+                      event.table_name);
+        return std::nullopt;
     }
 
-    switch (event.op) {
-	    case ChangeEvent::Op::Insert: {
-            spdlog::debug("[PgEmbeddingSink] insert event received - {}", event.table_name);
-            if (!event.new_row) { 
-                spdlog::warn("[PgEmbeddingSink] insert event dropped, no new row received - {}", event.table_name);
-                return;
-            }
-            const std::string id_val    = get_column(*event.new_row, tm->id_source_);
-            const std::string embed_val = get_column(*event.new_row, tm->embed_source_);
-            if (id_val.empty() || embed_val.empty())
-            { 
-                spdlog::warn("[PgEmbeddingSink] insert event dropped, no id source - {}", event.table_name);
-                return;
-            }
-            // Collect metadata values in mapping order
-            std::vector<std::string> meta_vals;
-            for (const auto& m : tm->columns) {
-                if (m.role == "metadata")
-                    meta_vals.push_back(get_column(*event.new_row, m.source_column));
-            }
+    const std::string id_val    = get_column(*event.new_row, tm.id_source_);
+    const std::string embed_val = get_column(*event.new_row, tm.embed_source_);
 
-            auto vec = provider_->embed(embed_val);
-            if (vec.empty()) { 
-                spdlog::warn("[PgEmbeddingSink] insert event dropped, no embedding value generated - {}", event.table_name);
-                return;
-            }
-            upsert(*tm, id_val, embed_val, meta_vals, vec);
-            break;
+    if (event.op == ChangeEvent::Op::Update) {
+        // Core value prop: skip embedding call if the embed column didn't change
+        if (is_toast(*event.new_row, tm.embed_source_)) {
+            spdlog::warn("[PgEmbeddingSink] update event dropped, skip id={}: {} unchanged (toast) - {}",
+                         id_val, tm.embed_source_, event.table_name);
+            return std::nullopt;
         }
-        case ChangeEvent::Op::Update: {
-            spdlog::debug("[PgEmbeddingSink] update event received - {}", event.table_name);
-            if (!event.new_row)
-            { 
-                spdlog::warn("[PgEmbeddingSink] update event dropped, no new row received - {}", event.table_name);
-                return;
+        if (event.old_row) {
+            const std::string old_val = get_column(*event.old_row, tm.embed_source_);
+            if (!old_val.empty() && old_val == embed_val) {
+                spdlog::warn("[PgEmbeddingSink] update event dropped, skip id={}: {} unchanged - {}",
+                             id_val, tm.embed_source_, event.table_name);
+                return std::nullopt;
             }
-            // This is the core value proposition: skip the embedding API call
-            // entirely if the embeddable column didn't change.
-            //
-            // Three cases where we skip:
-            //   1. new value is unchanged_toast — Postgres didn't resend it
-            //      because it didn't change (see ColumnValue::is_unchanged_toast)
-            //   2. old and new text values are identical strings
-            //   3. new text is empty/null — nothing to embed
-            const std::string id_val    = get_column(*event.new_row, tm->id_source_);
-            const std::string embed_val = get_column(*event.new_row, tm->embed_source_);
+        }
+    }
 
-            // Core value prop: skip embedding call if the embed column didn't change
-            if (is_toast(*event.new_row, tm->embed_source_)) {
-                spdlog::warn("[PgEmbeddingSink] update event dropped, skip id={}: {} unchanged (toast) - {}", 
-                             id_val.c_str(), 
-                             tm->embed_source_.c_str(),
-                             event.table_name);
-                return;
+    if (id_val.empty() || embed_val.empty()) {
+        spdlog::warn("[PgEmbeddingSink] {} event dropped, no id{} - {}",
+                      event.op == ChangeEvent::Op::Insert ? "insert" : "update",
+                      event.op == ChangeEvent::Op::Insert ? " source" : " or embedding val",
+                      event.table_name);
+        return std::nullopt;
+    }
+
+    BatchEvent be;
+    be.kind      = BatchEvent::Kind::Upsert;
+    be.tm        = &tm;
+    be.id_val    = id_val;
+    be.embed_val = embed_val;
+    for (const auto& m : tm.columns) {
+        if (m.role == "metadata") {
+            be.meta_vals.push_back(get_column(*event.new_row, m.source_column));
+        }
+    }
+    return be;
+}
+
+void PgEmbeddingSink::call_batch(const std::vector<ChangeEvent>& events) {
+    Batch batch;
+    batch.reserve(events.size());
+
+    // Pass 1: validate every event and record what needs to happen, in
+    // ORIGINAL event order — no database writes here.
+    for (const auto& event : events) {
+        const TableMapping* tm = nullptr;
+        for (const auto& m : config_.mappings) {
+            if (m.source_table == event.table_name) { tm = &m; break; }
+        }
+        if (!tm) {
+            spdlog::warn("[PgEmbeddingSink] No mapping configured for - {}", event.table_name);
+            continue;
+        }
+
+        switch (event.op) {
+            case ChangeEvent::Op::Insert:
+            case ChangeEvent::Op::Update: {
+                auto prepared = prepare_upsert(*tm, event);
+                if (!prepared) continue;
+                batch.push_back(std::move(*prepared));
+                break;
             }
-        
-            if (event.old_row) {
-                const std::string old_val = get_column(*event.old_row, tm->embed_source_);
-                if (!old_val.empty() && old_val == embed_val) {
-                    spdlog::warn("[PgEmbeddingSink] update event dropped, skip id={}: {} unchanged - {}",
-                                 id_val.c_str(), 
-                                 tm->embed_source_.c_str(),
-                                 event.table_name);
-                    return;
+            case ChangeEvent::Op::Delete: {
+                spdlog::debug("[PgEmbeddingSink] delete event received - {}", event.table_name);
+                if (!event.old_row) {
+                    spdlog::warn("[PgEmbeddingSink] delete event dropped, no old row received - {}", event.table_name);
+                    break;
                 }
+                std::string id_val = get_column(*event.old_row, tm->id_source_);
+                if (id_val.empty()) {
+                    spdlog::warn("[PgEmbeddingSink] delete event dropped, no id val  - {}", event.table_name);
+                    break;
+                }
+                BatchEvent be;
+                be.kind   = BatchEvent::Kind::Delete;
+                be.tm     = tm;
+                be.id_val = id_val;
+                batch.push_back(std::move(be));
+                break;
             }
-
-            if (id_val.empty() || embed_val.empty()) { 
-                spdlog::warn("[PgEmbeddingSink] update event dropped, no id or embedding val  - {}", event.table_name);
-                return;
-            }
-
-            std::vector<std::string> meta_vals;
-            for (const auto& m : tm->columns) {
-                if (m.role == "metadata")
-                    meta_vals.push_back(get_column(*event.new_row, m.source_column));
-            }
-
-            auto vec = provider_->embed(embed_val);
-            if (vec.empty()) { 
-                spdlog::warn("[PgEmbeddingSink] update event dropped, no embedding value generated - {}", event.table_name);
-                return;
-            }
-            upsert(*tm, id_val, embed_val, meta_vals, vec);    
-            break;
-        }
-        case ChangeEvent::Op::Delete: {
-            spdlog::debug("[PgEmbeddingSink] delete event received - {}", event.table_name);
-            if (!event.old_row) { 
-                spdlog::warn("[PgEmbeddingSink] delete event dropped, no old row received - {}", event.table_name);
-                return;
-            }
-            const std::string id_val = get_column(*event.old_row, tm->id_source_);
-            if (!id_val.empty()) { 
-                remove(*tm, id_val);
-            } else {
-                spdlog::warn("[PgEmbeddingSink] delete event dropped, no id val  - {}", event.table_name);
-            }
-            break;
         }
     }
+
+    if (batch.empty()) return;
+
+    // Derived from the batch itself rather than accumulated in a separate
+    // parallel vector during pass 1 — one source of truth
+    std::vector<std::string> texts_to_embed;
+    texts_to_embed.reserve(batch.size());
+    for (const auto& be : batch) {
+        if (be.kind == BatchEvent::Kind::Upsert) {
+            texts_to_embed.push_back(be.embed_val);
+        }
+    }
+
+    std::vector<std::vector<float>> vectors;
+    if (!texts_to_embed.empty()) {
+        vectors = provider_->embed_batch(texts_to_embed);
+        if (vectors.size() != texts_to_embed.size()) {
+            spdlog::error("[PgEmbeddingSink] embed_batch returned {} vectors for {} requested — dropping this batch",
+                          vectors.size(), texts_to_embed.size());
+            return;
+        }
+    }
+
+    // Pass 2: apply every action in ORIGINAL event order — upserts use
+    // their precomputed embedding, deletes run inline at their correct
+    // position relative to same-batch upserts for the same id.
+    size_t vec_idx = 0;
+    for (auto& be : batch) {
+        if (be.kind == BatchEvent::Kind::Upsert) {
+            const auto& vec = vectors[vec_idx++];
+            if (vec.empty()) {
+                spdlog::warn("[PgEmbeddingSink] event dropped, no embedding value generated - id={} table={}",
+                              be.id_val, be.tm->source_table);
+                continue;
+            }
+            upsert(*be.tm, be.id_val, be.embed_val, be.meta_vals, vec);
+        } else {
+            remove(*be.tm, be.id_val);
+        }
+    }
+}
+
+void PgEmbeddingSink::call(const ChangeEvent& event) 
+{
+    call_batch({event});
 }
 
 std::string PgEmbeddingSink::get_column(const DecodedRow& row, const std::string& col_name) 

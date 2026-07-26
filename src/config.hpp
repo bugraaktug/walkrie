@@ -20,6 +20,8 @@ struct AppSettings
     std::string log_file         = "/var/log/walkrie/walkrie.log";
     int         log_max_size_mb  = 10;
     int         log_max_files    = 5;
+    size_t      batch_size       = 1;
+    int         batch_timeout_ms = 50;
 };
 
 struct SourceConfig 
@@ -105,6 +107,15 @@ struct AppConfig
         if (std::find(valid_levels.begin(), valid_levels.end(), settings.log_level) == valid_levels.end()) {
             errors.push_back("[app] log_level must be one of: trace, debug, info, warn, error, critical");
         }
+
+        if (settings.batch_size < 1) {
+            errors.push_back("[app] batch_size must be >= 1");
+        }
+
+        if (settings.batch_timeout_ms <= 0) {
+            errors.push_back("[app] batch_timeout_ms must be > 0");
+        }
+
 	    if (sources.empty()) {
             errors.push_back("[source] at least one [[source]] block is required");
         }
@@ -122,6 +133,7 @@ struct AppConfig
         if (embedding.provider != "llama" && embedding.provider != "openai") {
             errors.push_back("[embedding] provider must be 'llama' or 'openai'");
         }
+
         if (embedding.provider == "llama") {
             if (embedding.model_path.empty()) {
                 errors.push_back("[embedding] model_path is required when provider = 'llama'");
@@ -152,6 +164,7 @@ struct AppConfig
                 errors.push_back("[embedding] dimensions must be > 0");
             }
         }
+
         if (embedding.provider == "openai") {
             if (embedding.api_key.empty()) {
                 errors.push_back("[embedding] api_key is required when provider = 'openai'");
@@ -211,10 +224,12 @@ inline AppConfig load_config(const std::string& path)
     };
 
     if (auto* a = tbl["app"].as_table()) {
-        cfg.settings.log_level       = str(a, "log_level",       cfg.settings.log_level);
-        cfg.settings.log_file        = str(a, "log_file",        cfg.settings.log_file);
-        cfg.settings.log_max_size_mb = i32(a, "log_max_size_mb", cfg.settings.log_max_size_mb);
-        cfg.settings.log_max_files   = i32(a, "log_max_files",   cfg.settings.log_max_files);
+        cfg.settings.log_level          = str(a, "log_level",       cfg.settings.log_level);
+        cfg.settings.log_file           = str(a, "log_file",        cfg.settings.log_file);
+        cfg.settings.log_max_size_mb    = i32(a, "log_max_size_mb", cfg.settings.log_max_size_mb);
+        cfg.settings.log_max_files      = i32(a, "log_max_files",   cfg.settings.log_max_files);
+        cfg.settings.batch_size         = static_cast<size_t>(i32(a, "batch_size", static_cast<int>(cfg.settings.batch_size)));
+        cfg.settings.batch_timeout_ms   = i32(a, "batch_timeout_ms", cfg.settings.batch_timeout_ms);
     }
 
     if (auto* arr = tbl["source"].as_array()) {
@@ -237,9 +252,9 @@ inline AppConfig load_config(const std::string& path)
         for (auto& elem : *arr) {
             if (auto* s = elem.as_table()) {
                 std::string sink_type = str(s, "type", "postgres-embedding");
-                auto sink = instantiate_sink(sink_type);
-                sink->load_from_config(*s);
-                cfg.sinks.push_back(std::move(sink));
+                auto sink_instance = instantiate_sink(sink_type);
+                sink_instance->load_from_config(*s);
+                cfg.sinks.push_back(std::move(sink_instance));
             }
         }
     }

@@ -20,6 +20,7 @@ public:
 
     void init() override;
     std::vector<float> embed(const std::string& text) override;
+    std::vector<std::vector<float>> embed_batch(const std::vector<std::string>& texts) override; 
     int dimensions() const override;
     std::string name() const override;
 protected:
