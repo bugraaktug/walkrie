@@ -36,6 +36,8 @@ This document describes the internal architecture of Walkrie's PostgreSQL-to-vec
 * **Single-producer/single-consumer queue** (`moodycamel::BlockingReaderWriterQueue`) decouples the replication read path (producer) from the embedding/sink write path (consumer).
 * **Blocking consumer wait** — the worker thread blocks on the queue rather than polling, so an idle pipeline consumes negligible CPU.
 * **Purpose**: an embedding API call (especially over HTTP to a remote provider) can take anywhere from milliseconds to seconds. Isolating this behind a queue means a slow embedding call doesn't block WAL consumption or risk the replication slot falling behind.
+* **Optional event batching** — `EventDispatcher` can group up to `batch_size` events (bounded by `batch_timeout_ms`, so low-traffic periods still flush promptly rather than waiting indefinitely to fill a batch) into a single `call_batch()` invocation per sink, instead of dispatching one event at a time. This is what allows a provider's `embed_batch()` to turn N embedding calls into fewer, larger ones (see Sink Layer below). Default `batch_size = 1` reproduces the original one-event-at-a-time behavior exactly — batching is strictly opt-in via config.
+* **Batching applies uniformly across all configured sinks in one dispatch cycle** — grouping happens once, upstream of the per-sink loop, not independently per sink. A `json-output` sink (which has no real batching work to do) still experiences the same grouping delay as a batching-aware `postgres-embedding` sink in the same job, and sinks are processed sequentially in `[[sink]]` config order within a batch — list latency-sensitive sinks first if running multiple sinks together and this matters for your use case.
 
 ### 3. Decode Layer (`pgoutput` Parser)
 
@@ -48,9 +50,15 @@ This document describes the internal architecture of Walkrie's PostgreSQL-to-vec
 
 * **Config-driven column mapping** — each source table maps to a sink table with per-column roles (`id`, `embed`, `metadata`) declared in TOML, resolved once at config-load time rather than re-parsed per event.
 * **Upsert-based writes** — sink writes use `INSERT ... ON CONFLICT (id) DO UPDATE`, making replays and reconnects safe without manual deduplication.
-* **Skip-unchanged updates** — on `Update` events, `PgEmbeddingSink` skips the embedding call entirely if the embed column is TOAST-unchanged or textually identical to the prior value, avoiding unnecessary embedding cost on updates that didn't touch the embedded field.
-* **Pluggable embedding providers** — a common `EmbeddingProvider` interface abstracts over local (`llama.cpp`) and remote (OpenAI HTTP API) backends; new providers implement `init()`, `embed()`, `dimensions()`, and `name()`.
-* **Pluggable sink types** — a `SinkConfiguration` interface (`postgres-embedding`, `json-output`) allows multiple sink blocks in one config, each independently constructing and owning its runtime `EventSink`.
+* **Skip-unchanged updates** — on `Update` events, `PgEmbeddingSink` skips the embedding call entirely if the embed column is TOAST-unchanged or textually identical to the prior value, avoiding unnecessary embedding cost on updates that didn't touch the embedded field. This check applies identically whether an event arrives via the single-event or batched path.
+* **Pluggable embedding providers** — a common `EmbeddingProvider` interface abstracts over local (`llama.cpp`) and remote (OpenAI HTTP API) backends; new providers implement `init()`, `embed()`, `dimensions()`, and `name()`. Providers additionally expose `embed_batch()`, defaulting to a loop over `embed()` for providers that haven't implemented real batching — `OpenAIProvider` overrides this with a genuine single-request batched call (`"input": [text1, text2, ...]`); `LlamaProvider` currently uses the default loop (see Known Limitations below).
+* **Pluggable sink types** — a `SinkConfiguration` interface (`postgres-embedding`, `json-output`) allows multiple sink blocks in one config, each independently constructing and owning its runtime `EventSink`. `EventSink` similarly exposes `call_batch()`, defaulting to a loop over `call()`; `PgEmbeddingSink` overrides it with real batching (below).
+* **Batched upsert ordering (`PgEmbeddingSink::call_batch`)** — validates every event in a batch first (skip-unchanged checks, null/empty-field checks — no database writes yet), collects everything needing an embedding into one `embed_batch()` call, then applies every resulting action (upserts *and* deletes) in a second pass, strictly preserving the batch's original event order. This ordering guarantee matters concretely: if an insert and a delete for the same row land in the same batch, applying them out of original order (e.g. running the delete immediately during validation, before a same-batch insert has been upserted) can silently resurrect a row that should have ended up deleted. The two-pass design exists specifically to prevent that. Covered by both a unit test (`test_pgembedding_sink_batch_ordering.cpp`) and a live-database integration test (see Testing below).
+
+## Known Limitations
+
+* **`LlamaProvider` does not yet implement real batched embedding.** `embed_batch()` currently falls back to the default base-class loop (one `embed()` call per text), so configuring `batch_size > 1` with the local Llama provider groups events at the dispatcher/sink level (fewer, larger DB-write batches) but does not yet reduce the number of `llama_encode()` calls. Real batching requires raising `n_seq_max` in `llama_context_params` and building a multi-sequence `llama_batch` — planned, not yet implemented. `OpenAIProvider` already benefits fully from `batch_size > 1` today (see PERFORMANCE.md for measured numbers).
+* Once `LlamaProvider::embed_batch()` is implemented with genuine multi-sequence computation, batched and sequential calls for the same input are not guaranteed to produce bit-identical embeddings (floating-point summation order differs inside a batched matmul vs. independent sequential calls) — this is a well-documented phenomenon in comparable transformer implementations, though not something llama.cpp's own documentation currently addresses directly. The integration test suite's equality tolerance will need loosening from near-zero to an appropriate drift tolerance at that point — see `integration_tests/README.md` for the full discussion and cited references.
 
 ## Prerequisites
 
@@ -107,6 +115,8 @@ log_level = "info"   # trace / debug / info / warn / error / critical
 log_file  = "/var/log/walkrie/walkrie.log"
 log_max_size_mb  = 10
 log_max_files    = 5
+batch_size       = 1    # 1 = no batching (default); group up to N events per sink call_batch()
+batch_timeout_ms = 50   # max wait to fill a batch before flushing what's collected so far
 
 [[source]]
 host        = "localhost"
@@ -149,6 +159,21 @@ n_ctx      = 512
 ```
 
 **Note on `type` in `[[sink]]`:** if omitted, defaults to `postgres-embedding`.
+
+### Batching (`batch_size` / `batch_timeout_ms`)
+
+Set in `[app]` (process-wide, applies to all sinks — not per-sink config):
+
+```toml
+[app]
+batch_size       = 8
+batch_timeout_ms = 50
+```
+
+* `batch_size` (default `1`) — maximum number of events `EventDispatcher` groups into a single `call_batch()` invocation per sink. `1` reproduces the pre-batching one-event-at-a-time behavior exactly.
+* `batch_timeout_ms` (default `50`) — maximum time to wait for a batch to fill before processing whatever's been collected so far. Ensures a lone event during a quiet period still gets processed promptly rather than waiting indefinitely for more events that may never arrive.
+* Only `OpenAIProvider` currently benefits from `batch_size > 1` with a genuine reduction in HTTP round-trips (measured ~7.3× lower per-row latency at `batch_size=10` — see PERFORMANCE.md). `LlamaProvider` does not yet implement real batched computation (see Known Limitations above) — raising `batch_size` with the local provider changes DB-write batching only, not embedding call count.
+* Batching groups events across **all** configured sinks in one dispatch cycle, not independently per sink — see the Isolation Layer note above if running `json-output` alongside `postgres-embedding`.
 
 ### Multiple sources into one sink table (discriminator)
 
@@ -284,6 +309,26 @@ usage: walkrie -c <config.toml> [-f] [--pid-file <path>]
       --pid-file <path>   PID file path when daemonizing (default: /run/walkrie/walkrie.pid)
   -h, --help               show this message
 ```
+
+## Testing
+
+### Unit tests (`walkrie_tests`, doctest, no live DB required)
+
+Covers WAL frame parsing, `pgoutput` message decoding, SQL builder output, config validation (including the model_path existence/readability/non-empty checks), `EventDispatcher`'s batching/timeout grouping behavior, and `PgEmbeddingSink::call_batch()`'s insert/delete-same-batch ordering guarantee via a recording test double (no real database connection needed for this specific test, since it only asserts the *order* of `upsert()`/`remove()` calls, not their SQL effects).
+
+```bash
+./walkrie_tests
+```
+
+### Integration tests (live Postgres + real embedding provider required)
+
+`test_sink_batch_mode` verifies that `PgEmbeddingSink::call()` (single-event path) and `call_batch()` (batched path) produce **identical final database state** for the same sequence of events, across 5 deterministic scenarios — including the exact insert+delete-same-batch regression case described above. Runs against two fixed, self-managed tables (`walkrie_it_single`, `walkrie_it_batch`) rather than live WAL streaming, so it's fast and fully repeatable.
+
+```bash
+./test_sink_batch_mode <config.toml> --conninfo "<pg conninfo>" [--epsilon 1e-6]
+```
+
+See `integration_tests/README.md` for the full scenario list and an important caveat: the current near-zero equality tolerance is only valid because `LlamaProvider` doesn't yet do real batched computation (see Known Limitations) — it will need loosening once that changes.
 
 ## Vector Indexing (Operator Responsibility)
 

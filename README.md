@@ -23,13 +23,14 @@ Most CDC-to-vector pipelines today are built from general-purpose tools (Debeziu
 * **Multi-table mapping** — configure multiple source tables, each with independent column mappings, in a single config file. Multiple sources can share one sink table using a static discriminator label, so overlapping IDs across tables never collide.
 * **OpenAI & local Llama integrations** — switch embedding provider via a single config field.
 * **Skip-unchanged & null-safety checks** — update events skip re-embedding when the source text didn't actually change (TOAST-unchanged column, or identical old/new value), and rows with a missing id or embed value are dropped before any embedding call — avoiding wasted API/inference cost on no-op updates.
+* **Optional event batching** — group multiple change events into a single batched embedding call (`batch_size`/`batch_timeout_ms` in config) instead of one call per row. Measured ~7.3× lower per-row latency with the OpenAI provider at a batch size of 10 (see PERFORMANCE.md). Off by default (`batch_size = 1`); the local Llama provider does not yet implement real batched computation under the hood (see TECHNICAL.md's Known Limitations) — full multi-sequence Llama batching is the next roadmap item.
 * **Upsert-based sink writes** — idempotent by design; replays and reconnects don't duplicate rows.
 * **Config validation at startup** — required fields, embedding provider settings, and (for the local Llama provider) the model file's existence, type, readability, and non-zero size are all checked before the daemon starts, so misconfiguration produces a clear error message instead of a crash loop.
 * **Foreground and daemon modes** — run under systemd (`-f` foreground) or as a classic detached daemon (double-fork, PID file, signal-based graceful shutdown on SIGTERM/SIGINT).
 
 ## Roadmap
 
-* Batched embedding requests — process multiple rows per `embed()` call (both local Llama batching and OpenAI's batched input API) to substantially improve throughput beyond today's single-threaded, one-row-at-a-time baseline.
+* Real batched embedding computation for the local Llama provider (multi-sequence `llama_encode()` via `n_seq_max`) — the dispatcher/config-level batching support already exists and is measured working end-to-end with OpenAI; Llama-side batching is the next step to get the same throughput win locally.
 * Vector index management helpers (HNSW index creation/verification on sink tables).
 * Multi-threaded embedding worker pool (multiple `llama_context` instances sharing one loaded model) to use more available CPU cores concurrently.
 
@@ -45,13 +46,6 @@ Walkrie ships as a `.deb` package. After installing:
 ```bash
 sudo dpkg -i walkrie_1.0.1~alpha1-1_amd64.deb
 sudo apt install -f   # resolve any missing runtime dependencies
-```
-
-## Verifying your download
-
-```bash
-sha256sum walkrie_1.0.1~alpha1-1_amd64.deb
-# expected: e725bb04884658bcb069d91d5fcd68b5ab210bbff0523c662113a70a14c89152
 ```
 
 The package creates a dedicated `walkrie` system user, installs a systemd unit (enabled but **not started** — see below), and creates:

@@ -150,6 +150,23 @@ Resource usage (RSS ~700–730 MB, CPU 400–600%+ peak) is consistent with the 
 
 Not run as a separate end-to-end benchmark in this pass — Section 2 already isolates and quantifies the per-call latency difference between the two embedding providers (Llama avg 63.32 ms vs. OpenAI avg 306.66 ms), which is the dominant variable between an OpenAI-backed and Llama-backed end-to-end run; the pgvector upsert cost (Section 3, ~4–8 ms/row baseline) and pipeline overhead (Section 1) are provider-independent. A full OpenAI end-to-end run would mainly confirm this arithmetic under real network conditions and is left as a future addition if OpenAI-specific network variance becomes a question worth answering directly.
 
+## 5. Batched vs. sequential embedding calls (OpenAI, `embedding_batch_bench`)
+
+Purpose: isolate the effect of batching multiple texts into a single `embed_batch()` call (one HTTP round-trip) versus calling `embed()` sequentially N times (N round-trips) — the change introduced by `EventDispatcher`'s optional event batching (`batch_size`/`batch_timeout_ms` in `[app]`) plus `OpenAIProvider::embed_batch()`'s real batched implementation.
+
+**Config**: `provider = "openai"`, `model = "text-embedding-3-small"`, batch size 10, 20 rounds per method.
+
+| Metric | Sequential (10× `embed()`) | Batched (1× `embed_batch()`) |
+|---|---|---|
+| Avg total/round | 1,983.14 ms | 271.33 ms |
+| Min total/round | 1,661.43 ms | 204.43 ms |
+| Max total/round | 4,564.08 ms | 341.67 ms |
+| **Avg per-row** | **198.31 ms** | **27.13 ms** |
+
+**~7.3× reduction in per-row latency** from batching 10 texts into one request. This is consistent with the theory behind why batching helps at all for a network-bound provider: N sequential HTTP round-trips each pay their own connection/queueing/network overhead independently, while one batched request pays that overhead once and lets OpenAI process the batch server-side. (For the CPU-bound local Llama provider, the equivalent win comes from a different mechanism — shifting from memory-bandwidth-bound GEMV to compute-bound GEMM — see Section 2's discussion; that number is not yet measured, since `LlamaProvider` doesn't implement real batched computation yet — see TECHNICAL.md's Known Limitations.)
+
+This specific result (batch size 10) is one data point, not necessarily the optimal batch size — a sweep across batch sizes (5/10/20/50) and a corresponding Llama batching measurement once implemented would complete the picture; both are flagged as follow-ups rather than included in this pass.
+
 ## Summary
 
 * **Pipeline mechanics are cheap.** With no embedding call and no database write (Section 1), Walkrie decodes and dispatches WAL events at sub-10ms median lag and under 25 MB RSS under realistic (batched-commit) load — the pipeline itself is not the bottleneck.
@@ -157,4 +174,4 @@ Not run as a separate end-to-end benchmark in this pass — Section 2 already is
 * **End-to-end steady-state throughput is ~7–10 events/sec** with the local Llama provider, serial embed + pgvector upsert on a single dispatcher thread (Section 3). This is the number to use for local-model deployment sizing on comparable hardware.
 * **CPU feature exposure is a critical, easy-to-miss deployment variable.** A VM with AVX2 not passed through to the guest measured 32× slower local-embedding latency with no error message — anyone deploying the local provider in a VM or container should check `grep avx2 /proc/cpuinfo` before concluding the model itself is slow.
 * **Lag figures in every burst-load test reflect queue drain time, not steady-state replication lag**, since all load-generation scripts used here commit input far faster than the pipeline can process it. A paced load generator is needed for a true steady-state lag number and is the main open item for future benchmarking.
-* **Batching is the clearest lever for improving throughput beyond current numbers** — the pipeline is currently single-threaded and unbatched at the embedding call; batching multiple rows into one `embed()` call (where the provider supports it) is the most direct next optimization, not covered by this benchmarking pass.
+* **Batching delivers a real, measured win for the network-bound OpenAI provider** — ~7.3× lower per-row latency at batch size 10 (Section 5), by collapsing N HTTP round-trips into one. The local Llama provider does not yet implement real batched computation (see TECHNICAL.md's Known Limitations) — batching's effect there remains theoretical (a shift from memory-bandwidth-bound to compute-bound execution, per Section 2's discussion) until `LlamaProvider::embed_batch()` is implemented and measured.
