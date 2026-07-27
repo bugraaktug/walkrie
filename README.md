@@ -76,6 +76,16 @@ If `config.toml` is invalid or the model file is missing/unreadable, `walkrie` w
 Walkrie runs entirely within your own infrastructure. Database credentials, replicated data, and schema details stay local to wherever you deploy the binary — nothing is sent to any third party.
 If you configure the OpenAI embedding provider, only the specific text fields you've mapped for embedding are sent to OpenAI's API, under OpenAI's own data handling terms — Walkrie itself does not collect or transmit any data.
 
+
+## License
+
+Walkrie is licensed under the [Apache License, Version 2.0](./LICENSE).
+
+Third-party dependencies (moodycamel, nlohmann/json, spdlog, toml++,
+llama.cpp, libpq, libevent, libcurl) are used under their own permissive
+licenses — see [THIRD-PARTY-LICENSES.md](./THIRD-PARTY-LICENSES.md) for
+the full list and license texts. See also [NOTICE](./NOTICE).
+
 ---
 
-Licensed under a Developer-First Commercial License. Built by a solo developer for engineers who care about mechanical sympathy.
+Built by a solo developer for engineers who care about mechanical sympathy.
