@@ -148,27 +148,29 @@ Resource usage (RSS ~700–730 MB, CPU 400–600%+ peak) is consistent with the 
 
 ### Real Llama batching enabled (`batch_size = 8`, Q8_0)
 
-Purpose: same end-to-end pipeline as above, but with `LlamaProvider::embed_batch()`'s real multi-sequence implementation active — earlier numbers in this section predate that implementation, so `batch_size` there only grouped DB writes, not `llama_encode()` calls. Model switched to `bge-m3-Q8_0.gguf` for this run rather than `Q4_K_M`: `embed()` and `embed_batch()` diverge meaningfully for `Q4_K_M` but match within the integration test's epsilon for `Q8_0` — see TECHNICAL.md's Known Limitations for the finding and why. Both runs below use the batched load generator (separate committed transactions, 10 rows each — the single-transaction burst load isn't included here, see Methodology for why that load pattern mostly measures queue-drain order rather than steady-state throughput).
+Purpose: same end-to-end pipeline as above, but with `LlamaProvider::embed_batch()`'s real multi-sequence implementation active — earlier numbers in this section predate that implementation, so `batch_size` there only grouped DB writes, not `llama_encode()` calls. Model switched to `bge-m3-Q8_0.gguf` for this run rather than `Q4_K_M`: `embed()` and `embed_batch()` diverge meaningfully for `Q4_K_M` but match within the integration test's epsilon for `Q8_0` — see TECHNICAL.md's Known Limitations for the finding and why. The first column below uses the single-transaction burst load (`generate_load.sql`); the other two use the batched load generator (separate committed transactions, 10 rows each).
 
 **Config**: `sink.type = "postgres-embedding"`, `provider = "llama"`, `model_path = ".../bge-m3-Q8_0.gguf"`, `n_ctx = 512`, `[app] batch_size = 8`, `batch_timeout_ms = 50`.
 
-| Metric | 200 rows | 500 rows |
-|---|---|---|
-| Total wall time | 88.7 s | 64.5 s |
-| Pure processing time | 23.1 s | 61.2 s |
-| Processing throughput | 8.6 events/sec | 8.2 events/sec |
-| Lag min | 11.2 ms | 5.0 ms |
-| Lag avg | 9,507.5 ms | 29,371.9 ms |
-| Lag p50 | 8,107.9 ms | 29,311.5 ms |
-| Lag p95 | 20,929.8 ms | 56,056.9 ms |
-| Lag p99 | 22,070.3 ms | 58,448.4 ms |
-| Lag max | 22,352.5 ms | 59,033.7 ms |
-| Avg CPU | 104.1% | 370.6% |
-| Peak CPU | 405.7% | 556.0% |
-| Avg RSS | 760.1 MB | 787.1 MB |
-| Peak RSS | 787.5 MB | 789.7 MB |
+| Metric | 200 rows, single-transaction burst | 200 rows, batched load | 500 rows, batched load |
+|---|---|---|---|
+| Total wall time | 22.2 s | 88.7 s | 64.5 s |
+| Pure processing time | 22.0 s | 23.1 s | 61.2 s |
+| Processing throughput | 9.1 events/sec | 8.6 events/sec | 8.2 events/sec |
+| Lag min | 34,359.8 ms | 11.2 ms | 5.0 ms |
+| Lag avg | 43,736.2 ms | 9,507.5 ms | 29,371.9 ms |
+| Lag p50 | 42,348.2 ms | 8,107.9 ms | 29,311.5 ms |
+| Lag p95 | 55,075.7 ms | 20,929.8 ms | 56,056.9 ms |
+| Lag p99 | 56,077.5 ms | 22,070.3 ms | 58,448.4 ms |
+| Lag max | 56,327.9 ms | 22,352.5 ms | 59,033.7 ms |
+| Avg CPU | 392.5% | 104.1% | 370.6% |
+| Peak CPU | 404.6% | 405.7% | 556.0% |
+| Avg RSS | 786.2 MB | 760.1 MB | 787.1 MB |
+| Peak RSS | 787.3 MB | 787.5 MB | 789.7 MB |
 
-Throughput (8.2–8.6 events/sec) sits inside the same ~7–10 events/sec range measured *before* real Llama batching existed — consistent with §5's isolated finding below that real batching doesn't reduce per-row cost on this hardware, rather than a regression specific to this run. Lag is backlog-bound exactly as in the three runs above (200÷8.6=23.3s vs. 22.4s max; 500÷8.2=61.0s vs. 59.0s max) — same internal consistency check, same caveat that a paced load generator is needed for a true steady-state lag figure.
+Throughput across all three (8.2–9.1 events/sec) sits inside the same ~7–10 events/sec range measured *before* real Llama batching existed — consistent with §5's isolated finding below that real batching doesn't reduce per-row cost on this hardware, rather than a regression specific to any one run.
+
+The batched-load columns are backlog-bound exactly as in the original three runs above (200÷8.6=23.3s vs. 22.4s max; 500÷8.2=61.0s vs. 59.0s max) — same internal consistency check, same caveat that a paced load generator is needed for a true steady-state lag figure. The burst column does *not* satisfy that same check (200÷9.1=22.0s pure processing vs. a 56.3s max lag, nearly 2.5× higher) — its 200 rows share one `commit_timestamp` from a single transaction (Methodology), so lag here also folds in whatever time elapsed between that commit and `walkrie_bench` actually starting to drain the slot, not just this run's own queue-drain time. Treat this burst run's throughput/resource figures as the meaningful takeaway, same caveat as Section 1's single-transaction result — its lag numbers are not a steady-state or even a pure-queue-drain figure.
 
 ## 4. End-to-end pipeline (postgres-embedding sink, OpenAI provider)
 
