@@ -375,7 +375,34 @@ int main(int argc, char** argv)
 
     auto single_sink = make_sink(conninfo, kSingleTable, provider);
     auto batch_sink   = make_sink(conninfo, kBatchTable, provider);
+/*
+auto a  = provider->embed("hello world");
+auto b1 = provider->embed_batch({"hello world"});          // batch capacity 4, but only 1 real sequence used
+auto b2 = provider->embed_batch({"hello world", "hello world"}); // identical text in both slots
+//auto b3 = provider->embed_batch({"hello world", "hello world", "hello world"}); // identical text in both slots
 
+std::cout << "embed() vs embed_batch(1 item):  " << max_abs_diff(a, b1.at(0)) << "\n";
+std::cout << "embed_batch b2 1.item vs b2 2.item (same text): " << max_abs_diff(b2.at(0), b2.at(1)) << "\n";
+//std::cout << "embed_batch b3 1.item  vs a  (same text): " << max_abs_diff(b3.at(0), a) << "\n";
+//std::cout << "embed_batch b3 3.item  vs a  (same text): " << max_abs_diff(b3.at(2), a) << "\n";
+//std::cout << "embed_batch b3 3.item  vs b3 2.item  (same text): " << max_abs_diff(b3.at(2), b3.at(1)) << "\n";
+//std::cout << "embed_batch b3 2.item vs b2 2.item (same text): " << max_abs_diff(b3.at(1), b2.at(1)) << "\n";
+
+auto print_head = [](const std::string& label, const std::vector<float>& v) {
+    std::cout << label << ": ";
+    for (int i = 0; i < 25; ++i) std::cout << v[i] << " ";
+    std::cout << "\n";
+};
+
+print_head("a       ", a);
+//print_head("b1.at(0)", b1.at(0));
+print_head("b2.at(0)", b2.at(0));
+print_head("b2.at(1)", b2.at(1));
+//print_head("b2.at(1)", b2.at(1));
+//print_head("b3.at(0)", b3.at(0));
+//print_head("b3.at(1)", b3.at(1));
+//print_head("b3.at(2)", b3.at(2));
+*/
     auto scenarios = build_scenarios();
 
     int total = 0;

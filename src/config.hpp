@@ -76,13 +76,14 @@ struct TableMapping
 
 struct EmbeddingConfig 
 {
-    std::string provider    = "llama";   // "llama" or "openai" (openai = future stub)
-    std::string model;			         // required for openai; ignored for llama
-    std::string model_path;              // required for llama; ignored for openai
-    std::string api_key;                 // required for openai; ignored for llama
-    int         dimensions   = 1024;     // must match model output + pgvector column
-    int         n_threads    = 4;        // llama.cpp CPU threads
-    int         n_ctx        = 512;      // llama.cpp context window
+    std::string provider        = "llama";  // "llama" or "openai" (openai = future stub)
+    std::string model;			            // required for openai; ignored for llama
+    std::string model_path;                 // required for llama; ignored for openai
+    std::string api_key;                    // required for openai; ignored for llama
+    int         dimensions      = 1024;     // must match model output + pgvector column
+    int         n_threads       = 4;        // llama.cpp CPU threads
+    int         n_ctx           = 512;      // llama.cpp context window
+    int         max_batch_size  = 1;        // llama.cpp batch size; equalized to app batch size internally  
 };
 
 struct AppConfig 
@@ -268,6 +269,7 @@ inline AppConfig load_config(const std::string& path)
         cfg.embedding.n_threads   = i32(e, "n_threads",    cfg.embedding.n_threads);
         cfg.embedding.n_ctx       = i32(e, "n_ctx",        cfg.embedding.n_ctx);
     }
+    cfg.embedding.max_batch_size = cfg.settings.batch_size;
 
     return cfg;
 }

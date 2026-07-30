@@ -8,7 +8,7 @@ log_level = "debug"   # trace / debug / info / warn / error / critical
 log_file  = "/tmp/logs/walkrie.log"
 log_max_size_mb  = 10
 log_max_files    = 5
-batch_size       = 4
+batch_size       = 10
 batch_timout_ms  = 50
 
 [[source]]

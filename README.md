@@ -23,14 +23,14 @@ Most CDC-to-vector pipelines today are built from general-purpose tools (Debeziu
 * **Multi-table mapping** — configure multiple source tables, each with independent column mappings, in a single config file. Multiple sources can share one sink table using a static discriminator label, so overlapping IDs across tables never collide.
 * **OpenAI & local Llama integrations** — switch embedding provider via a single config field.
 * **Skip-unchanged & null-safety checks** — update events skip re-embedding when the source text didn't actually change (TOAST-unchanged column, or identical old/new value), and rows with a missing id or embed value are dropped before any embedding call — avoiding wasted API/inference cost on no-op updates.
-* **Optional event batching** — group multiple change events into a single batched embedding call (`batch_size`/`batch_timeout_ms` in config) instead of one call per row. Measured ~7.3× lower per-row latency with the OpenAI provider at a batch size of 10 (see PERFORMANCE.md). Off by default (`batch_size = 1`); the local Llama provider does not yet implement real batched computation under the hood (see TECHNICAL.md's Known Limitations) — full multi-sequence Llama batching is the next roadmap item.
+* **Optional event batching** — group multiple change events into a single batched embedding call (`batch_size`/`batch_timeout_ms` in config) instead of one call per row. Off by default (`batch_size = 1`). Both providers now implement real batched embedding: the OpenAI provider measures ~7.3× lower per-row latency at a batch size of 10 (one HTTP call instead of ten), and the local Llama provider now does genuine multi-sequence `llama_encode()` batching too — though, measured so far, it's ~20% *slower* per row than sequential calls on tested hardware rather than a win (see PERFORMANCE.md and TECHNICAL.md's Known Limitations for the numbers and the working hypothesis why).
 * **Upsert-based sink writes** — idempotent by design; replays and reconnects don't duplicate rows.
 * **Config validation at startup** — required fields, embedding provider settings, and (for the local Llama provider) the model file's existence, type, readability, and non-zero size are all checked before the daemon starts, so misconfiguration produces a clear error message instead of a crash loop.
 * **Foreground and daemon modes** — run under systemd (`-f` foreground) or as a classic detached daemon (double-fork, PID file, signal-based graceful shutdown on SIGTERM/SIGINT).
 
 ## Roadmap
 
-* Real batched embedding computation for the local Llama provider (multi-sequence `llama_encode()` via `n_seq_max`) — the dispatcher/config-level batching support already exists and is measured working end-to-end with OpenAI; Llama-side batching is the next step to get the same throughput win locally.
+* Root-cause why local Llama batching doesn't reduce latency (dense non-causal attention over the combined ubatch is the working hypothesis — see TECHNICAL.md's Known Limitations) and re-benchmark once profiling confirms the mechanism and on non-VM hardware.
 * Vector index management helpers (HNSW index creation/verification on sink tables).
 * Multi-threaded embedding worker pool (multiple `llama_context` instances sharing one loaded model) to use more available CPU cores concurrently.
 

@@ -8,8 +8,8 @@ log_level = "debug"   # trace / debug / info / warn / error / critical
 log_file  = "/tmp/logs/walkrie.log"
 log_max_size_mb  = 10
 log_max_files    = 5
-batch_size       = 4
-batch_timout_ms  = 50
+batch_size       = 10
+batch_timeout_ms = 50
 
 [[source]]
 host        = "localhost"
@@ -22,12 +22,11 @@ publication = "test_pub"
 
 [[sink]]
 type 	     	= "json-output"	
-output_target   = "discard"
+output_target   = "stdout"
 
 [embedding]
 provider   = "llama"
-#model_path = "/home/debian/models/bge-m3/bge-m3-Q4_K_M.gguf"
-model_path = "/home/debian/models/bge-m3/bge-m3-Q8_0.gguf"
+model_path = "/home/debian/models/bge-m3/bge-m3-Q4_K_M.gguf"
 api_key    = ""
 dimensions = 1024
 n_threads  = 4

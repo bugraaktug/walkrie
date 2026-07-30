@@ -71,31 +71,32 @@ integration test that truncates tables between runs.
 Exit code is `0` if all scenarios pass, `1` otherwise — safe to wire into
 a CI step or pre-merge check.
 
-## Important: the equality tolerance will need to change once Llama batching lands
+## Important: the equality tolerance is now quantization-dependent
 
-As of this writing, `LlamaProvider` has **no real `embed_batch()`
-override** — it inherits `EmbeddingProvider`'s default, which loops
-calling `embed()` on each text individually. That means the "batched"
-path in this test is, today, doing the exact same per-text `embed()`
-calls as the "single" path — so their embeddings are expected to come
-back **bit-identical**, and the default `--epsilon 1e-6` reflects that
-(near-zero tolerance, just enough to absorb harmless floating-point
-formatting round-trip through `::text` serialization).
+`LlamaProvider::embed_batch()` now has a real override — a multi-sequence
+`llama_encode()` (via `n_seq_max`), not the default per-`embed()` loop.
+As predicted below, batched and sequential calls are **not** guaranteed
+to produce bit-identical output, and this has now been confirmed
+empirically, with a twist: how far apart they land depends on the
+model's quantization.
 
-**Once `LlamaProvider::embed_batch()` is implemented with real
-multi-sequence `llama_encode()` (via `n_seq_max`), this assumption
-breaks.** Genuine batched computation is not guaranteed to produce
-bit-identical floating-point results to sequential per-row calls —
-different summation order inside a batched matmul can produce tiny
-numerical differences from computing the same row in isolation. At that
-point:
+- **`bge-m3-Q4_K_M.gguf`** — `embed()` vs. `embed_batch()` diverge well
+  past the default near-zero `--epsilon 1e-6`. A test run against this
+  model at a tight epsilon will (correctly) fail the cross-comparison
+  check.
+- **`bge-m3-Q8_0.gguf`** — the two match within the default `--epsilon
+  1e-6`. This is the quantization used for the Llama numbers in
+  PERFORMANCE.md's batching section for that reason.
 
-- `--epsilon` will need to be loosened to a tolerance appropriate for
-  floating-point drift (a small max-abs-diff threshold, or switch the
-  comparison to cosine similarity with a threshold like `> 0.999999`
-  rather than raw difference).
-- This is worth treating as a deliberate, documented tolerance change at
-  that time — not a silent "loosen it until the test passes" fix, since a
+See TECHNICAL.md's Known Limitations for the likely explanation (`Q8_0`'s
+flat per-block int8 scaling carries much less baseline quantization error
+than `Q4_K_M`'s hierarchical k-quant scaling, so it absorbs the
+batched-vs-sequential floating-point summation-order difference without
+exceeding tolerance). Practically: pick `--epsilon` per model rather than
+assuming one tolerance covers every quantization —
+
+- This is worth treating as a deliberate, documented tolerance choice per
+  model — not a silent "loosen it until the test passes" fix, since a
   tolerance that's too loose would stop catching a genuine correctness
   regression.
 

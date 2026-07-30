@@ -2,7 +2,7 @@
 # gen_load_batched.sh — commits every 1000 rows instead of one giant transaction
 CONN="host=localhost port=5432 dbname=qdb user=quser password=quser1234"
 BATCH=10
-TOTAL=200
+TOTAL=500
 
 for ((i=0; i<TOTAL; i+=BATCH)); do
     psql "$CONN" -c "

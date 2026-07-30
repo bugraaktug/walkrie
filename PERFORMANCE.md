@@ -146,6 +146,30 @@ Purpose: full pipeline, real embedding calls, real pgvector upsert — the numbe
 
 Resource usage (RSS ~700–730 MB, CPU 400–600%+ peak) is consistent with the loaded BGE-M3 model (~540 MB per the model-load log) plus llama.cpp's 4 compute threads running concurrently with the replication and dispatcher threads — not indicative of a leak.
 
+### Real Llama batching enabled (`batch_size = 8`, Q8_0)
+
+Purpose: same end-to-end pipeline as above, but with `LlamaProvider::embed_batch()`'s real multi-sequence implementation active — earlier numbers in this section predate that implementation, so `batch_size` there only grouped DB writes, not `llama_encode()` calls. Model switched to `bge-m3-Q8_0.gguf` for this run rather than `Q4_K_M`: `embed()` and `embed_batch()` diverge meaningfully for `Q4_K_M` but match within the integration test's epsilon for `Q8_0` — see TECHNICAL.md's Known Limitations for the finding and why. Both runs below use the batched load generator (separate committed transactions, 10 rows each — the single-transaction burst load isn't included here, see Methodology for why that load pattern mostly measures queue-drain order rather than steady-state throughput).
+
+**Config**: `sink.type = "postgres-embedding"`, `provider = "llama"`, `model_path = ".../bge-m3-Q8_0.gguf"`, `n_ctx = 512`, `[app] batch_size = 8`, `batch_timeout_ms = 50`.
+
+| Metric | 200 rows | 500 rows |
+|---|---|---|
+| Total wall time | 88.7 s | 64.5 s |
+| Pure processing time | 23.1 s | 61.2 s |
+| Processing throughput | 8.6 events/sec | 8.2 events/sec |
+| Lag min | 11.2 ms | 5.0 ms |
+| Lag avg | 9,507.5 ms | 29,371.9 ms |
+| Lag p50 | 8,107.9 ms | 29,311.5 ms |
+| Lag p95 | 20,929.8 ms | 56,056.9 ms |
+| Lag p99 | 22,070.3 ms | 58,448.4 ms |
+| Lag max | 22,352.5 ms | 59,033.7 ms |
+| Avg CPU | 104.1% | 370.6% |
+| Peak CPU | 405.7% | 556.0% |
+| Avg RSS | 760.1 MB | 787.1 MB |
+| Peak RSS | 787.5 MB | 789.7 MB |
+
+Throughput (8.2–8.6 events/sec) sits inside the same ~7–10 events/sec range measured *before* real Llama batching existed — consistent with §5's isolated finding below that real batching doesn't reduce per-row cost on this hardware, rather than a regression specific to this run. Lag is backlog-bound exactly as in the three runs above (200÷8.6=23.3s vs. 22.4s max; 500÷8.2=61.0s vs. 59.0s max) — same internal consistency check, same caveat that a paced load generator is needed for a true steady-state lag figure.
+
 ## 4. End-to-end pipeline (postgres-embedding sink, OpenAI provider)
 
 Not run as a separate end-to-end benchmark in this pass — Section 2 already isolates and quantifies the per-call latency difference between the two embedding providers (Llama avg 63.32 ms vs. OpenAI avg 306.66 ms), which is the dominant variable between an OpenAI-backed and Llama-backed end-to-end run; the pgvector upsert cost (Section 3, ~4–8 ms/row baseline) and pipeline overhead (Section 1) are provider-independent. A full OpenAI end-to-end run would mainly confirm this arithmetic under real network conditions and is left as a future addition if OpenAI-specific network variance becomes a question worth answering directly.
@@ -163,9 +187,28 @@ Purpose: isolate the effect of batching multiple texts into a single `embed_batc
 | Max total/round | 4,564.08 ms | 341.67 ms |
 | **Avg per-row** | **198.31 ms** | **27.13 ms** |
 
-**~7.3× reduction in per-row latency** from batching 10 texts into one request. This is consistent with the theory behind why batching helps at all for a network-bound provider: N sequential HTTP round-trips each pay their own connection/queueing/network overhead independently, while one batched request pays that overhead once and lets OpenAI process the batch server-side. (For the CPU-bound local Llama provider, the equivalent win comes from a different mechanism — shifting from memory-bandwidth-bound GEMV to compute-bound GEMM — see Section 2's discussion; that number is not yet measured, since `LlamaProvider` doesn't implement real batched computation yet — see TECHNICAL.md's Known Limitations.)
+**~7.3× reduction in per-row latency** from batching 10 texts into one request. This is consistent with the theory behind why batching helps at all for a network-bound provider: N sequential HTTP round-trips each pay their own connection/queueing/network overhead independently, while one batched request pays that overhead once and lets OpenAI process the batch server-side. (For the CPU-bound local Llama provider, the theorized equivalent win was shifting from memory-bandwidth-bound GEMV to compute-bound GEMM — see Section 2's discussion; the local Llama provider's actual measurement, now that `embed_batch()` is implemented, is below, and it does not bear this theory out.)
 
-This specific result (batch size 10) is one data point, not necessarily the optimal batch size — a sweep across batch sizes (5/10/20/50) and a corresponding Llama batching measurement once implemented would complete the picture; both are flagged as follow-ups rather than included in this pass.
+This specific result (batch size 10) is one data point, not necessarily the optimal batch size — a sweep across batch sizes (5/10/20/50) would complete the picture for OpenAI and is flagged as a follow-up.
+
+### Local Llama (BGE-M3, Q8_0, `embedding_bench_batch`)
+
+Purpose: the corresponding measurement for `LlamaProvider::embed_batch()`, now that it does genuine multi-sequence computation (see TECHNICAL.md's Known Limitations) instead of the default per-`embed()` loop.
+
+**Config**: `provider = "llama"`, `model_path = ".../bge-m3-Q8_0.gguf"`, `dimensions = 1024`, `n_threads = 4`, `n_ctx = 512` (context reports back as `n_ctx=2560 n_batch=10240 n_ubatch=10240 n_seq_max=10` once sized for 10 parallel sequences — see `LlamaProvider::init()`), batch size 10, 20 rounds per method.
+
+| Metric | Sequential (10× `embed()`) | Batched (1× `embed_batch()`) |
+|---|---|---|
+| Avg total/round | 502.29 ms | 602.37 ms |
+| Min total/round | 475.85 ms | 575.01 ms |
+| Max total/round | 576.16 ms | 692.03 ms |
+| **Avg per-row** | **50.23 ms** | **60.24 ms** |
+
+**~20% *higher* per-row latency when batched** — the opposite of the OpenAI result above, and the opposite of this section's original (pre-implementation) theory that batching would help Llama by shifting per-row GEMV into a single larger GEMM.
+
+**Working hypothesis (not yet confirmed by profiling):** `LlamaProvider::embed_batch()` packs all sequences in a chunk into one `llama_encode()` call as parallel sequences sharing one ubatch (`build_batch()` in `llama_provider.cpp`). For a non-causal (embedding) model, attention is a dense QK^T over the whole ubatch — cross-sequence entries are masked to zero *after* the matmul, not skipped by the kernel — so attention compute scales with `(combined tokens in the ubatch)²` rather than `Σ(tokens per sequence)²`. Batching N short sequences into one ubatch multiplies attention cost roughly by N, while the GEMM efficiency gained in the QKV/FFN projections is a comparatively smaller effect at this model size and these sequence lengths — netting a net loss instead of a win. Worth confirming directly (e.g. profiling time spent in the attention sub-graph, or checking whether the slowdown scales with batch size as this theory predicts) before treating it as settled.
+
+**Caveats on this result**: measured on a single resource-constrained VM (see Environment) and against a `llama.cpp` checkout that is itself still under active upstream development — batching internals here are more likely to shift under a `llama.cpp` bump than the rest of this document. Treat this as one data point on this specific hardware/version, not a final verdict on whether Llama-side batching can ever win; a batch-size sweep and a profiled breakdown are natural follow-ups, same as the OpenAI sweep above.
 
 ## Summary
 
@@ -174,4 +217,5 @@ This specific result (batch size 10) is one data point, not necessarily the opti
 * **End-to-end steady-state throughput is ~7–10 events/sec** with the local Llama provider, serial embed + pgvector upsert on a single dispatcher thread (Section 3). This is the number to use for local-model deployment sizing on comparable hardware.
 * **CPU feature exposure is a critical, easy-to-miss deployment variable.** A VM with AVX2 not passed through to the guest measured 32× slower local-embedding latency with no error message — anyone deploying the local provider in a VM or container should check `grep avx2 /proc/cpuinfo` before concluding the model itself is slow.
 * **Lag figures in every burst-load test reflect queue drain time, not steady-state replication lag**, since all load-generation scripts used here commit input far faster than the pipeline can process it. A paced load generator is needed for a true steady-state lag number and is the main open item for future benchmarking.
-* **Batching delivers a real, measured win for the network-bound OpenAI provider** — ~7.3× lower per-row latency at batch size 10 (Section 5), by collapsing N HTTP round-trips into one. The local Llama provider does not yet implement real batched computation (see TECHNICAL.md's Known Limitations) — batching's effect there remains theoretical (a shift from memory-bandwidth-bound to compute-bound execution, per Section 2's discussion) until `LlamaProvider::embed_batch()` is implemented and measured.
+* **Batching delivers a real, measured win for the network-bound OpenAI provider** — ~7.3× lower per-row latency at batch size 10 (Section 5), by collapsing N HTTP round-trips into one.
+* **Batching does *not* currently help the local Llama provider** — now that `LlamaProvider::embed_batch()` does genuine multi-sequence computation, the isolated measurement shows ~20% *higher* per-row latency batched vs. sequential (Section 5), and the end-to-end run confirms it (Section 3's real-batching numbers land in the same ~7–10 events/sec range as before batching existed). Working hypothesis: dense non-causal attention over the combined ubatch scales with combined-sequence-length², offsetting the GEMM efficiency gained elsewhere — not yet confirmed by profiling, and measured on a resource-constrained VM against a still-evolving `llama.cpp`, so treat this as a snapshot rather than a ceiling.
