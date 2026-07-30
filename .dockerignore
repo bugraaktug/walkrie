@@ -1,0 +1,17 @@
+# Keep the build context small — none of this is needed to build walkrie.
+.git
+build/
+third_party/llama.cpp/build/
+third_party/llama.cpp/build-*/
+
+# Debian packaging artifacts (rebuilt from packaging/debian/ if needed, not
+# part of the Docker image at all)
+packaging/debian/walkrie/
+packaging/debian/.debhelper/
+packaging/debian/files
+packaging/debian/*.substvars
+packaging/debian/*.log
+packaging/debian/debhelper-build-stamp
+
+*.swp
+.vimrc

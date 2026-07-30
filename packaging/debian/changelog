@@ -1,3 +1,25 @@
+walkrie (1.1.0~alpha1-1) unstable; urgency=low
+
+  * Docker packaging: multi-stage Dockerfile (statically-linked llama.cpp,
+    non-root runtime image), docker-compose.sample.yml, README/TECHNICAL.md
+    Docker install docs. No config or model file baked into the image —
+    same reasoning as the .deb package's config validation.
+  * LlamaProvider now implements real multi-sequence batched embedding
+    (embed_batch() via n_seq_max), not the default per-embed() loop.
+    Measured ~20% slower per row than sequential calls on tested hardware,
+    unlike OpenAI's batching (~7.3x faster) — see PERFORMANCE.md and
+    TECHNICAL.md's Known Limitations for the numbers and working hypothesis.
+  * Correctness finding: embed()/embed_batch() match within epsilon for
+    Q8_0 quantization but diverge meaningfully for Q4_K_M — see
+    TECHNICAL.md's Known Limitations.
+  * Fixed missing libspdlog-dev in debian/control's Build-Depends (present
+    in CMakeLists.txt's find_package(spdlog) requirement but absent from
+    the package's declared build dependencies since alpha1).
+  * Known limitation: local Llama batching is implemented but not yet a
+    throughput win — see PERFORMANCE.md and TECHNICAL.md.
+
+ -- bugra <bugraaktug@gmail.com>  Thu, 30 Jul 2026 14:00:00 +0300
+
 walkrie (1.0.1~alpha1-1) unstable; urgency=low
 
   * Initial alpha release.

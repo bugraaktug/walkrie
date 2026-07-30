@@ -109,6 +109,21 @@ sudo chown walkrie:walkrie /var/lib/walkrie/models/bge-m3-Q4_K_M.gguf
 
 Set `model_path` in `/etc/walkrie/config.toml` to match. At startup, Walkrie validates that `model_path` exists, is a regular file, is readable by the running user, and is non-empty — a missing or misconfigured model produces a clear config-validation error rather than a runtime crash.
 
+## Docker Build
+
+`Dockerfile` (repo root) is a two-stage build:
+
+1. **`build` stage** (`debian:12-slim` + build toolchain) — `cmake --build build --target walkrie`, building only the `walkrie` binary target (not `walkrie_tests`/benches/demo, which the image doesn't need). `llama.cpp`/`ggml` are statically linked (`-DBUILD_SHARED_LIBS=OFF`, same as `packaging/debian/rules`), so nothing from `third_party/llama.cpp` needs to exist at runtime.
+2. **`runtime` stage** (`debian:12-slim` + `libpq5`/`libevent-2.1-7`/`libcurl4`/`ca-certificates` only) — copies just the compiled binary out of the build stage, runs as a dedicated non-root `walkrie` system user, same UID-isolation intent as the systemd unit's `User=walkrie`.
+
+The build stage needs `third_party/llama.cpp` already checked out (`git submodule update --init --recursive`) — Docker doesn't resolve git submodules on its own, and the Dockerfile fails fast with an explicit message rather than a confusing CMake error if that step was skipped.
+
+**No config is copied into `/etc/walkrie/config.toml`, on purpose** — unlike the `.deb` package, which does install a starter template there. `config_sample.toml` carries a plaintext placeholder password and a `host = "localhost"` that resolves to the container itself, not a useful default inside a container network. Baking that in risks someone starting the container without noticing it silently isn't pointed at their real database. Instead, `/etc/walkrie` is a declared `VOLUME`, and the image relies on the same startup config validation described throughout this document to fail loudly if nothing's bind-mounted there. The pristine reference copy is still shipped, at `/usr/share/doc/walkrie/config.toml.example`, matching where the `.deb` package's `config.toml.example` lives.
+
+Local model files (`/var/lib/walkrie/models`) and logs (`/var/log/walkrie`) are declared volumes for the same reason the `.deb` package doesn't bundle a model — see Model Installation above; bind-mount a `models/` directory containing your `.gguf` file rather than expecting one to be present.
+
+See the README's [Docker installation](./README.md#installation-docker) section for build/run commands and `docker-compose.sample.yml` for a working starting point.
+
 ## Configuration Syntax
 
 ```toml

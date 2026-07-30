@@ -71,6 +71,28 @@ Before starting the service:
 
 If `config.toml` is invalid or the model file is missing/unreadable, `walkrie` will refuse to start and log a clear, specific error rather than crash-looping.
 
+## Installation (Docker)
+
+```bash
+git submodule update --init --recursive   # if not already done
+docker build -t walkrie:1.1.0-alpha1 .
+```
+
+No config is baked into the image — `config_sample.toml`'s placeholder credentials and `host = "localhost"` mean something different inside a container, so walkrie refuses to start with the same clear config-validation error described above until you bind-mount your own:
+
+```bash
+docker run --rm \
+    -v "$(pwd)/config.toml:/etc/walkrie/config.toml:ro" \
+    -v "$(pwd)/models:/var/lib/walkrie/models:ro" \
+    -v "$(pwd)/logs:/var/log/walkrie" \
+    walkrie:1.1.0-alpha1
+```
+
+* If your Postgres source/sink runs on the Docker host rather than in the same container network, point `config.toml`'s `host` at `host.docker.internal` (works out of the box with Docker Desktop on Mac/Windows) rather than `localhost`.
+* The local Llama provider's `.gguf` model file still isn't bundled in the image (same licensing/size reasons as the `.deb` package) — bind-mount it from a `models/` directory as shown above.
+* `docker-compose.sample.yml` in the repo root has a working starting point with these volumes pre-wired; copy it to `docker-compose.yml` and adjust.
+* See [TECHNICAL.md](./TECHNICAL.md#docker-build) for what the image actually contains and why it's built the way it is.
+
 ## Security & Deployment
 
 Walkrie runs entirely within your own infrastructure. Database credentials, replicated data, and schema details stay local to wherever you deploy the binary — nothing is sent to any third party.

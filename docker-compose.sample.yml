@@ -1,0 +1,26 @@
+# Sample compose file — rename to docker-compose.yml and adjust before use.
+# Does not include Postgres/pgvector: this assumes a source and sink
+# database you already manage, same as the .deb package's systemd unit
+# assumes an existing Postgres install.
+#
+#   cp docker-compose.sample.yml docker-compose.yml
+#   cp config_sample.toml config.toml   # then edit config.toml for real use
+#   docker compose up -d
+
+services:
+  walkrie:
+    build: .
+    image: walkrie:1.1.0-alpha1
+    restart: on-failure
+    volumes:
+      - ./config.toml:/etc/walkrie/config.toml:ro
+      - ./models:/var/lib/walkrie/models:ro
+      - ./logs:/var/log/walkrie
+    # If Postgres runs on the Docker host itself rather than in this
+    # compose file's network, point config.toml's `host` at the
+    # container-to-host address instead of "localhost":
+    #   Docker Desktop (Mac/Windows): host = "host.docker.internal" — resolves out of the box.
+    #   Linux: uncomment extra_hosts below, then set host = "host.docker.internal" in config.toml too.
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"
+    stop_grace_period: 30s
