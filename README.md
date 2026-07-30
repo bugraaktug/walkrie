@@ -44,7 +44,7 @@ Most CDC-to-vector pipelines today are built from general-purpose tools (Debeziu
 Walkrie ships as a `.deb` package. After installing:
 
 ```bash
-sudo dpkg -i walkrie_1.0.1~alpha1-1_amd64.deb
+sudo dpkg -i walkrie_1.1.0~alpha1-1_amd64.deb
 sudo apt install -f   # resolve any missing runtime dependencies
 ```
 

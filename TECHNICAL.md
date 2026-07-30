@@ -89,7 +89,7 @@ make -j$(nproc)
 ## Installation (pre-built `.deb` package)
 
 ```bash
-sudo dpkg -i walkrie_1.0.1~alpha1-1_amd64.deb
+sudo dpkg -i walkrie_1.1.0~alpha1-1_amd64.deb
 sudo apt install -f
 ```
 
