@@ -4,6 +4,10 @@ walkrie (1.1.0~alpha1-1) unstable; urgency=low
     non-root runtime image), docker-compose.sample.yml, README/TECHNICAL.md
     Docker install docs. No config or model file baked into the image —
     same reasoning as the .deb package's config validation.
+  * Optional event batching (batch_size/batch_timeout_ms in [app]) plus a
+    real OpenAIProvider::embed_batch() implementation (one HTTP request
+    for N texts instead of N requests) — measured ~7.3x lower per-row
+    latency at batch_size=10. See PERFORMANCE.md Section 5.
   * LlamaProvider now implements real multi-sequence batched embedding
     (embed_batch() via n_seq_max), not the default per-embed() loop.
     Measured ~20% slower per row than sequential calls on tested hardware,
