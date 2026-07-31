@@ -15,8 +15,6 @@ bool errors_contain(const std::vector<std::string>& errors, const std::string& n
     return false;
 }
 
-// Mirrors the minimal valid config used elsewhere in the suite, but kept
-// local so this file's tests don't depend on test_config_model.cpp.
 pgcdc::AppConfig make_minimal_valid_config() {
     pgcdc::AppConfig cfg;
     cfg.settings.log_level = "info";
