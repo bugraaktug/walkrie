@@ -6,16 +6,19 @@
 #include "config.hpp"
 #include "pgsink_configuration.hpp"
 
-namespace {
+namespace 
+{
 
-bool errors_contain(const std::vector<std::string>& errors, const std::string& needle) {
+bool errors_contain(const std::vector<std::string>& errors, const std::string& needle) 
+{
     for (const auto& e : errors) {
         if (e.find(needle) != std::string::npos) return true;
     }
     return false;
 }
 
-pgcdc::AppConfig make_minimal_valid_config() {
+pgcdc::AppConfig make_minimal_valid_config() 
+{
     pgcdc::AppConfig cfg;
     cfg.settings.log_level = "info";
 

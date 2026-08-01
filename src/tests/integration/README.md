@@ -1,4 +1,13 @@
-# Batching Integration Test
+# Integration Tests
+
+Both tests below need a live Postgres + pgvector connection and a real
+embedding provider — that's what makes them integration tests rather than
+part of the `walkrie_tests` doctest suite (`src/tests/`), which needs
+neither. Each uses its own dedicated tables and its own dedicated config
+file, so running one doesn't disturb the other or whatever tables/config
+you use for your own manual testing.
+
+## Batching Integration Test (`test_sink_batch_mode`)
 
 `test_sink_batch_mode.cpp` verifies that `PgEmbeddingSink::call()`
 (the single-event path — what `batch_size=1` produces) and
@@ -144,3 +153,50 @@ warns about — worth re-verifying empirically (run this test with real
 batched `llama_encode()` output and measure the actual drift) once that
 implementation exists, rather than assuming a specific tolerance value in
 advance.
+
+## Sink Dimension-Check Integration Test (`test_sink_dims_check`)
+
+`test_sink_dims_check.cpp` verifies `PgEmbeddingSink::verify_sink_column_dimensions()`
+(`pgembedding_sink.cpp`) — the startup check that compares a sink table's
+actual `vector(N)` column width (read from `pg_attribute.atttypmod`)
+against the embedding provider's real output dimension, throwing before
+any writes happen rather than letting every upsert fail at runtime with
+pgvector's own `expected N dimensions, not M` error. This needs a real
+`pg_attribute` lookup against a live connection, so — like the batching
+test above — it can't be covered by the doctest unit suite.
+
+### Cases
+
+1. **`matching_dims_passes_init`** — sink column declared with exactly the
+   provider's dimension; `init()` must not throw.
+2. **`mismatched_dims_throws_naming_both_values`** — sink column declared
+   `provider_dims + 7`; `init()` must throw, and the message must name
+   both the column's declared width and the provider's actual output size.
+3. **`unconstrained_vector_column_skips_check`** — sink column declared as
+   a bare `vector` (no dimension, `atttypmod = -1`); nothing to compare
+   against, so `init()` must not throw.
+4. **`missing_sink_column_throws`** — table created with no embedding
+   column at all; `init()` must throw mentioning the column wasn't found.
+
+Each case creates its table fresh (`DROP TABLE IF EXISTS` then `CREATE
+TABLE`), constructs a `PgEmbeddingSink` pointed at it, and asserts whether
+`init()` throws (and, when it should, that the exception message contains
+the expected substrings) — then drops the table again.
+
+### Running
+
+```bash
+./test_sink_dims_check ../config_samples/config_sample_dims_check_test.toml \
+    --conninfo "host=localhost port=5432 dbname=walkrie_test user=walkrie_demo password=changeme"
+```
+
+Uses its own dedicated config (`config_sample_dims_check_test.toml`) and
+its own dedicated tables, all prefixed `walkrie_it_dims_*` — distinct from
+the batching test's `walkrie_it_single`/`walkrie_it_batch` — so the two
+integration tests don't interfere with each other. Only `[embedding]` in
+that config is actually read (to construct the real embedding provider and
+learn its true output dimension); `[source]`/`[sink]` exist only to make
+it a complete, loadable config file.
+
+Exit code is `0` if all cases pass, `1` otherwise — same convention as
+`test_sink_batch_mode`, safe to wire into the same CI step.

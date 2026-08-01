@@ -71,6 +71,7 @@ add_library(walkrie_core STATIC
     src/openai_provider.cpp
     src/embedding_provider.cpp
     src/pgembedding_sink.cpp
+    src/model/gguf_metadata_reader.cpp
 )
 target_include_directories(walkrie_core PUBLIC
     ${CMAKE_SOURCE_DIR}/include
@@ -118,9 +119,16 @@ target_link_libraries(walkrie_tests PRIVATE walkrie_core)
 # --- integration tests ---
 add_executable(test_sink_batch_mode
     src/tests/integration/test_sink_batch_mode.cpp)
-target_include_directories(test_sink_batch_mode PRIVATE 
+target_include_directories(test_sink_batch_mode PRIVATE
     src src/include src/third_party)
-target_link_libraries(test_sink_batch_mode PRIVATE 
+target_link_libraries(test_sink_batch_mode PRIVATE
+    walkrie_core)
+
+add_executable(test_sink_dims_check
+    src/tests/integration/test_sink_dims_check.cpp)
+target_include_directories(test_sink_dims_check PRIVATE
+    src src/include src/third_party)
+target_link_libraries(test_sink_dims_check PRIVATE
     walkrie_core)
 
 # --- end to end bench ---

@@ -8,8 +8,10 @@
 #include <vector>
 
 #include <toml.hpp>
+#include <spdlog/spdlog.h>
 
 #include "sink_configuration.hpp"
+#include "model/gguf_metadata_reader.hpp"
 
 namespace pgcdc 
 {
@@ -83,7 +85,8 @@ struct EmbeddingConfig
     int         dimensions      = 1024;     // must match model output + pgvector column
     int         n_threads       = 4;        // llama.cpp CPU threads
     int         n_ctx           = 512;      // llama.cpp context window
-    int         max_batch_size  = 1;        // llama.cpp batch size; equalized to app batch size internally  
+    int         max_batch_size  = 1;        // llama.cpp batch size; equalized to app batch size internally
+    std::string validate        = "none";   //  none|warn|force; check model file for dimensions
 };
 
 struct AppConfig 
@@ -135,6 +138,10 @@ struct AppConfig
             errors.push_back("[embedding] provider must be 'llama' or 'openai'");
         }
 
+        if (embedding.validate != "none" && embedding.validate != "warn" && embedding.validate != "force") {
+            errors.push_back("[embedding] validate must be one of: none, warn, force");
+        }
+
         if (embedding.provider == "llama") {
             if (embedding.model_path.empty()) {
                 errors.push_back("[embedding] model_path is required when provider = 'llama'");
@@ -159,7 +166,31 @@ struct AppConfig
                     errors.push_back("[embedding] model_path points to an empty (0-byte) file: '" +
                                     embedding.model_path + "' — the download may have failed or "
                                     "been interrupted");
+                } else if (embedding.validate != "none") {
+                    GgufMetadataReader reader;
+                    ModelMetadata meta = reader.read(embedding.model_path);
+                    std::string message;
+                    if (!meta.parsed) {
+                        message = "[embedding] model_path is not a valid GGUF file: '" +
+                                  embedding.model_path + "' — check it's the right file and "
+                                  "wasn't corrupted or truncated during download";
+                    } else if (meta.embedding_dimensions && *meta.embedding_dimensions != embedding.dimensions) {
+                        message = "[embedding] dimensions (" + std::to_string(embedding.dimensions) +
+                                  ") does not match the embedding size declared by the model at '" +
+                                  embedding.model_path + "' (" +
+                                  std::to_string(*meta.embedding_dimensions) +
+                                  ") — set [embedding] dimensions to match the model";
+                    }
+
+                    if (!message.empty()) {
+                        if (embedding.validate == "force") {
+                            errors.push_back(message);
+                        } else { // "warn"
+                            spdlog::error(message);
+                        }
+                    }
                 }
+                // embedding.validate == "none": skip the check entirely — the file is never opened.
             }
 	        if (embedding.dimensions <= 0) {
                 errors.push_back("[embedding] dimensions must be > 0");
@@ -268,6 +299,7 @@ inline AppConfig load_config(const std::string& path)
         cfg.embedding.dimensions  = i32(e, "dimensions",   cfg.embedding.dimensions);
         cfg.embedding.n_threads   = i32(e, "n_threads",    cfg.embedding.n_threads);
         cfg.embedding.n_ctx       = i32(e, "n_ctx",        cfg.embedding.n_ctx);
+        cfg.embedding.validate    = str(e, "validate",     cfg.embedding.validate);
     }
     cfg.embedding.max_batch_size = cfg.settings.batch_size;
 

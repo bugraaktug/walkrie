@@ -2,6 +2,7 @@
 #include "pg_sql_builder.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <spdlog/spdlog.h>
 #include <sstream>
@@ -55,12 +56,56 @@ void PgEmbeddingSink::init()
     bool has_vector = (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0);
     PQclear(res);
     if (!has_vector) {
-        spdlog::error("[PgEmbeddingSink] pgvector extension not installed in target db {}", config_.sink_table); 
+        spdlog::error("[PgEmbeddingSink] pgvector extension not installed in target db {}", config_.sink_table);
         throw std::runtime_error("EmbeddingSink: pgvector extension not installed in target db. "
                                  "Run: CREATE EXTENSION vector;");
     }
 
+    verify();
+
     spdlog::info("[PgEmbeddingSink] pg connection ok, pgvector present for {} table", config_.sink_table);
+}
+
+void PgEmbeddingSink::verify()
+{
+    const char* params[2] = { config_.sink_table.c_str(), config_.sink_column.c_str() };
+    PGresult* res = PQexecParams(pg_,
+        "SELECT atttypmod FROM pg_attribute "
+        "WHERE attrelid = $1::regclass AND attname = $2 AND NOT attisdropped",
+        2, nullptr, params, nullptr, nullptr, 0);
+
+    if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+        std::string err = PQerrorMessage(pg_);
+        PQclear(res);
+        throw std::runtime_error("EmbeddingSink: failed to look up sink column '" + config_.sink_column +
+                                 "' on table '" + config_.sink_table + "': " + err);
+    }
+    if (PQntuples(res) == 0) {
+        PQclear(res);
+        throw std::runtime_error("EmbeddingSink: sink column '" + config_.sink_column +
+                                 "' not found on table '" + config_.sink_table + "'");
+    }
+
+    // pgvector stores a vector(N) column's declared width directly as
+    // atttypmod (no VARHDRSZ-style offset, unlike e.g. varchar(N)); -1 means
+    // the column was declared as a bare `vector` with no dimension, which we
+    // can't check anything against.
+    int column_dims = std::atoi(PQgetvalue(res, 0, 0));
+    PQclear(res);
+
+    if (column_dims <= 0) {
+        spdlog::debug("[PgEmbeddingSink] sink column '{}.{}' has no declared vector dimension — skipping dims check",
+                      config_.sink_table, config_.sink_column);
+        return;
+    }
+
+    int provider_dims = provider_->dimensions();
+    if (column_dims != provider_dims) {
+        throw std::runtime_error("EmbeddingSink: sink column '" + config_.sink_table + "." + config_.sink_column +
+                                 "' is vector(" + std::to_string(column_dims) +
+                                 ") but the embedding provider produces " + std::to_string(provider_dims) +
+                                 "-dimensional vectors — fix [embedding] dimensions or the column definition");
+    }
 }
 
 std::optional<BatchEvent> PgEmbeddingSink::prepare_upsert(const TableMapping& tm, 

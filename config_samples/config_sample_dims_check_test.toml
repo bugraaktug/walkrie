@@ -1,0 +1,62 @@
+# walkrie config — dedicated to test_sink_dims_check, so it can be run
+# without touching whatever config/tables you use for manual testing.
+#
+# Usage:
+#   ./test_sink_dims_check config_samples/config_sample_dims_check_test.toml \
+#       --conninfo "host=localhost port=5432 dbname=walkrie_test user=walkrie_demo password=changeme"
+#
+# Only [embedding] is actually read by test_sink_dims_check (it builds the
+# embedding provider from this section to get the real output dimension,
+# then constructs its own PgEmbeddingSinkConfig per test case rather than
+# reading [sink]). [app]/[source]/[sink] below exist only so this is a
+# complete, loadable config file — they're not exercised by the test.
+#
+# The test creates/drops its own tables, all prefixed walkrie_it_dims_* —
+# distinct from test_sink_batch_mode's walkrie_it_single/walkrie_it_batch —
+# so the two integration tests, and your own manually-managed tables, don't
+# collide as long as you don't reuse the walkrie_it_dims_* prefix yourself.
+
+[app]
+log_level = "debug"   # trace / debug / info / warn / error / critical
+log_file  = "/tmp/logs/walkrie_dims_check_test.log"
+log_max_size_mb  = 10
+log_max_files    = 5
+
+[[source]]
+host        = "localhost"
+port        = "5432"
+dbname      = "qdb"
+user        = "quser"
+password    = "quser1234"
+slot_name   = "cdc_slot"
+publication = "test_pub"
+
+[[sink]]
+host     	= "localhost"
+port     	= "5432"
+dbname   	= "qdb"
+user     	= "quser"
+password 	= "quser1234"
+table    	= "public.walkrie_it_dims_check_config_unused"
+embed_column 	= "embedding"
+
+ [[sink.table_mapping]]
+ source_table = "test_table"
+
+    [[sink.table_mapping.columns]]
+    source_column = "id"
+    sink_column   = "item_id"
+    role          = "id"
+
+    [[sink.table_mapping.columns]]
+    source_column = "name"
+    sink_column   = "item_name"
+    role          = "embed"
+
+[embedding]
+provider   = "llama"
+model_path = "/home/debian/models/bge-m3/bge-m3-Q4_K_M.gguf"
+api_key    = ""
+dimensions = 1024
+n_threads  = 4
+n_ctx      = 512

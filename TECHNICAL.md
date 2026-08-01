@@ -175,7 +175,13 @@ model_path = "/var/lib/walkrie/models/bge-m3-Q4_K_M.gguf"
 dimensions = 1024
 n_threads  = 4
 n_ctx      = 512
+validate   = "force"   # "none" (default) | "warn" | "force" — see note below
 ```
+
+**Note on `validate`** (llama provider only): at startup, `AppConfig::validate()` can cross-check `model_path` against `dimensions` by reading the GGUF file's own declared embedding size (`GgufMetadataReader`, `src/model/`) — catching a `dimensions` mismatch or a corrupt/wrong model file before the daemon starts, rather than failing later inside `LlamaProvider::init()`. This costs a small file read (header + KV metadata only, never the multi-GB tensor blob — see `src/model/gguf_metadata_reader.hpp`), so it's opt-in via `validate`:
+* `"none"` (default) — skip the check entirely; `model_path` is not even opened for this purpose. Matches trusted setups (tests, benchmarks, CI) where the config is already known correct and the extra file open is unnecessary cost.
+* `"warn"` — run the check; on a mismatch or an invalid GGUF file, log via `spdlog::error` and continue starting up.
+* `"force"` — run the check; on a mismatch or an invalid GGUF file, add to `validate()`'s error list, which callers treat as a reason to refuse to start — the same treatment as the existing `model_path` existence/readability/size checks.
 
 **Note on `type` in `[[sink]]`:** if omitted, defaults to `postgres-embedding`.
 
@@ -307,6 +313,8 @@ dimensions = 1536
 
 **Note on `dimensions`:** this value must match both the embedding model's actual output size and the sink table's `vector(N)` column width. `text-embedding-3-small` supports truncation down to any size ≤ 1536; `text-embedding-3-large` down to any size ≤ 3072; `text-embedding-ada-002` does not support truncation and must be set to exactly 1536.
 
+The sink-table half of that is checked unconditionally, for every provider, every startup — `PgEmbeddingSink::init()` (`src/pgembedding_sink.cpp`) queries `pg_attribute.atttypmod` for the configured `sink_column` right after confirming the `vector` extension is installed, and compares it against `provider_->dimensions()` (the embedding provider's actual, already-loaded output size — not the config value one hop removed from it). pgvector enforces an *exact* dimension match on every insert regardless of direction (a vector shorter **or** longer than the column's declared width both fail with pgvector's own `expected N dimensions, not M` error — there's no varchar-style truncation/padding for `vector(N)`), so this is a strict equality check. A mismatch throws at startup with both numbers named, rather than failing on the first upsert. If `sink_column` was declared as a bare `vector` with no dimension (`atttypmod = -1`), there's nothing to compare against and the check is silently skipped. Unlike the GGUF `[embedding] validate` check above, this one isn't gated behind a config flag — it's a single indexed catalog lookup against a connection already being opened, not a model file open, so the cost argument for making it opt-in doesn't apply here.
+
 ## Execution
 
 **Foreground** (recommended under systemd — see `walkrie.service`):
@@ -349,7 +357,13 @@ Covers WAL frame parsing, `pgoutput` message decoding (including `Truncate` — 
 ./test_sink_batch_mode <config.toml> --conninfo "<pg conninfo>" [--epsilon 1e-6]
 ```
 
-See `integration_tests/README.md` for the full scenario list. `LlamaProvider` now does real batched computation, so the near-zero default `--epsilon` no longer holds universally — it holds for `Q8_0`-class quantizations (confirmed) but not for `Q4_K_M` (confirmed divergent) — see Known Limitations above before picking a model + epsilon combination for CI.
+See `src/tests/integration/README.md` for the full scenario list. `LlamaProvider` now does real batched computation, so the near-zero default `--epsilon` no longer holds universally — it holds for `Q8_0`-class quantizations (confirmed) but not for `Q4_K_M` (confirmed divergent) — see Known Limitations above before picking a model + epsilon combination for CI.
+
+`test_sink_dims_check` verifies `PgEmbeddingSink::verify_sink_column_dimensions()` — the startup check described in the "Note on `dimensions`" above — across 4 cases: matching dims (no throw), mismatched dims (throws, naming both values), an unconstrained `vector` column with no declared dimension (skipped, no throw), and a missing sink column (throws). Needs a real `pg_attribute` lookup, so it's an integration test too, not a doctest case. Uses its own dedicated tables (`walkrie_it_dims_*`) and config (`config_sample_dims_check_test.toml`), independent of `test_sink_batch_mode`'s.
+
+```bash
+./test_sink_dims_check <config.toml> --conninfo "<pg conninfo>"
+```
 
 ## Vector Indexing (Operator Responsibility)
 
