@@ -64,7 +64,42 @@ void PgOutputParser::handle_begin(const uint8_t* data, size_t len)
     pending_commit_timestamp_unix_us_ = pg_epoch_us + kPgEpochOffsetUs;
 }
 
-DecodedRow PgOutputParser::decode_tuple(const RelationInfo& rel, const uint8_t*& p, const uint8_t* end, TupleKind kind) 
+std::vector<ChangeEvent> PgOutputParser::handle_truncate(const uint8_t* data, size_t len)
+{
+    const uint8_t* p = data;
+    const uint8_t* end = data + len;
+    (void)end; // bounds-checking omitted in this sketch; see README "hardening" note
+
+    uint32_t num_relations = read_u32(p);
+    uint8_t flags = read_u8(p); // bit 1 = CASCADE, bit 2 = RESTART IDENTITY — unused for now
+    (void)flags;
+
+    std::vector<ChangeEvent> events;
+    events.reserve(num_relations);
+
+    for (uint32_t i = 0; i < num_relations; ++i) {
+        uint32_t rel_id = read_u32(p);
+        auto it = relations_.find(rel_id);
+        if (it == relations_.end()) {
+            // Unlike Insert/Update/Delete, a missing relation here doesn't
+            // invalidate the rest of the message — other relation_ids in
+            // the same Truncate can still be resolved and emitted.
+            spdlog::warn("[PgOutputParser] Truncate for unknown relation id {} (missing Relation message) — skipping", rel_id);
+            continue;
+        }
+
+        ChangeEvent ev;
+        ev.op = ChangeEvent::Op::Truncate;
+        ev.schema_name = it->second.schema_name;
+        ev.table_name = it->second.table_name;
+        ev.commit_timestamp = pending_commit_timestamp_unix_us_;
+        events.push_back(std::move(ev));
+    }
+
+    return events;
+}
+
+DecodedRow PgOutputParser::decode_tuple(const RelationInfo& rel, const uint8_t*& p, const uint8_t* end, TupleKind kind)
 {
     (void)end;
     DecodedRow row;
@@ -97,7 +132,7 @@ DecodedRow PgOutputParser::decode_tuple(const RelationInfo& rel, const uint8_t*&
     return row;
 }
 
-std::optional<ChangeEvent> PgOutputParser::parse(const uint8_t* data, size_t len) 
+std::optional<std::vector<ChangeEvent>> PgOutputParser::parse(const uint8_t* data, size_t len)
 {
     if (len == 0) return std::nullopt;
 
@@ -127,9 +162,7 @@ std::optional<ChangeEvent> PgOutputParser::parse(const uint8_t* data, size_t len
             return std::nullopt;
 
         case 'T': // Truncate
-            // num_relations(4) + flags(1) + relation_id[]... — worth logging
-            // a warning for in main.cpp later; not modeled as a ChangeEvent yet.
-            return std::nullopt;
+            return handle_truncate(p, static_cast<size_t>(end - p));
 
         case 'I': { // Insert
             uint32_t rel_id = read_u32(p);
@@ -147,7 +180,7 @@ std::optional<ChangeEvent> PgOutputParser::parse(const uint8_t* data, size_t len
             ev.table_name = it->second.table_name;
             ev.new_row = std::move(new_row);
             ev.commit_timestamp = pending_commit_timestamp_unix_us_;
-            return ev;
+            return std::vector<ChangeEvent>{std::move(ev)};
         }
 
         case 'U': { // Update
@@ -174,7 +207,7 @@ std::optional<ChangeEvent> PgOutputParser::parse(const uint8_t* data, size_t len
             if (tag == 'N') {
                 ev.new_row = decode_tuple(it->second, p, end, TupleKind::UpdateNew);
             }
-            return ev;
+            return std::vector<ChangeEvent>{std::move(ev)};
         }
 
         case 'D': { // Delete
@@ -193,7 +226,7 @@ std::optional<ChangeEvent> PgOutputParser::parse(const uint8_t* data, size_t len
             uint8_t tag = read_u8(p); // 'K' (key-only) or 'O' (full old row, our setup)
             ev.old_row = decode_tuple(it->second, p, end, TupleKind::Delete);
             (void)tag;
-            return ev;
+            return std::vector<ChangeEvent>{std::move(ev)};
         }
 
         default:

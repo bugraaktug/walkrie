@@ -43,13 +43,15 @@ protected:
                         const std::vector<std::string>& metadata_values,
                         const std::vector<float>& embedding);
     virtual bool remove(const TableMapping& tm, const std::string& item_id);
- 
+    virtual bool truncate(const TableMapping& tm);
+
 private:
     PgEmbeddingSinkConfig config_;
     std::shared_ptr<EmbeddingProvider> provider_;
     std::unique_ptr<ISqlBuilder> sql_builder_;
     std::unordered_map<std::string, std::string> upsert_sql_list_;
     std::unordered_map<std::string, std::string> delete_sql_list_;
+    std::unordered_map<std::string, std::string> truncate_sql_list_;
     PGconn* pg_ = nullptr;
 
     std::optional<BatchEvent> prepare_upsert(const TableMapping& tm,

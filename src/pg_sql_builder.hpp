@@ -11,6 +11,7 @@ public:
 
     std::string build_upsert_sql(const TableMapping& tm) const override;
     std::string build_delete_sql(const TableMapping& tm) const override;
+    std::string build_truncate_sql(const TableMapping& tm) const override;
 
 private:
     std::string sink_table_;

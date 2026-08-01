@@ -34,6 +34,9 @@ void PgEmbeddingSink::init()
         delete_sql_list_[tm.source_table] = sql_builder_->build_delete_sql(tm);
         spdlog::debug("[PgEmbeddingSink] delete sql for mapping {} ready - {}",
                       tm.source_table, delete_sql_list_[tm.source_table]);
+        truncate_sql_list_[tm.source_table] = sql_builder_->build_truncate_sql(tm);
+        spdlog::debug("[PgEmbeddingSink] truncate sql for mapping {} ready - {}",
+                      tm.source_table, truncate_sql_list_[tm.source_table]);
     }
 
     // --- pgvector sink connection ---
@@ -153,6 +156,14 @@ void PgEmbeddingSink::call_batch(const std::vector<ChangeEvent>& events) {
                 batch.push_back(std::move(be));
                 break;
             }
+            case ChangeEvent::Op::Truncate: {
+                spdlog::info("[PgEmbeddingSink] truncate event received - {}", event.table_name);
+                BatchEvent be;
+                be.kind = BatchEvent::Kind::Truncate;
+                be.tm   = tm;
+                batch.push_back(std::move(be));
+                break;
+            }
         }
     }
 
@@ -183,16 +194,23 @@ void PgEmbeddingSink::call_batch(const std::vector<ChangeEvent>& events) {
     // position relative to same-batch upserts for the same id.
     size_t vec_idx = 0;
     for (auto& be : batch) {
-        if (be.kind == BatchEvent::Kind::Upsert) {
-            const auto& vec = vectors[vec_idx++];
-            if (vec.empty()) {
-                spdlog::warn("[PgEmbeddingSink] event dropped, no embedding value generated - id={} table={}",
-                              be.id_val, be.tm->source_table);
-                continue;
+        switch (be.kind) {
+            case BatchEvent::Kind::Upsert: {
+                const auto& vec = vectors[vec_idx++];
+                if (vec.empty()) {
+                    spdlog::warn("[PgEmbeddingSink] event dropped, no embedding value generated - id={} table={}",
+                                  be.id_val, be.tm->source_table);
+                    continue;
+                }
+                upsert(*be.tm, be.id_val, be.embed_val, be.meta_vals, vec);
+                break;
             }
-            upsert(*be.tm, be.id_val, be.embed_val, be.meta_vals, vec);
-        } else {
-            remove(*be.tm, be.id_val);
+            case BatchEvent::Kind::Delete:
+                remove(*be.tm, be.id_val);
+                break;
+            case BatchEvent::Kind::Truncate:
+                truncate(*be.tm);
+                break;
         }
     }
 }
@@ -278,7 +296,34 @@ bool PgEmbeddingSink::remove(const TableMapping& tm, const std::string& id_value
     return ok;
 }
 
-bool PgEmbeddingSink::is_toast(const DecodedRow& row, const std::string& col_name) 
+bool PgEmbeddingSink::truncate(const TableMapping& tm)
+{
+    const std::string& sql = truncate_sql_list_.at(tm.source_table);
+
+    std::vector<const char*> params;
+    if (tm.has_discriminator_) {
+        params.push_back(tm.discriminator_label_.c_str());
+    } else {
+        spdlog::warn("[PgEmbeddingSink] truncate for table={} has no discriminator configured — "
+                     "deleting every row in sink table {} (including rows from any other mapping "
+                     "sharing this sink table)", tm.source_table, config_.sink_table);
+    }
+
+    PGresult* res = PQexecParams(pg_, sql.c_str(), static_cast<int>(params.size()),
+                                  nullptr, params.data(), nullptr, nullptr, 0);
+    bool ok = (PQresultStatus(res) == PGRES_COMMAND_OK);
+    if (!ok) {
+        spdlog::error("[PgEmbeddingSink] truncate failed table={}: {}",
+                      tm.source_table, PQerrorMessage(pg_));
+    } else {
+        spdlog::info("[PgEmbeddingSink] truncated sink rows for table={} - {}",
+                     tm.source_table, config_.sink_table);
+    }
+    PQclear(res);
+    return ok;
+}
+
+bool PgEmbeddingSink::is_toast(const DecodedRow& row, const std::string& col_name)
 {
     for (const auto& col : row.columns) {
         if (col.name == col_name) return col.is_unchanged_toast;

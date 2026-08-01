@@ -30,8 +30,8 @@ public:
     using pgcdc::PgEmbeddingSink::PgEmbeddingSink;
 
     struct RecordedAction {
-        enum class Kind { Upsert, Delete } kind;
-        std::string id_value;
+        enum class Kind { Upsert, Delete, Truncate } kind;
+        std::string id_value; // empty for Truncate — no row id involved
     };
     std::vector<RecordedAction> actions;
 
@@ -47,6 +47,11 @@ protected:
 
     bool remove(const pgcdc::TableMapping& /*tm*/, const std::string& item_id) override {
         actions.push_back({RecordedAction::Kind::Delete, item_id});
+        return true;
+    }
+
+    bool truncate(const pgcdc::TableMapping& /*tm*/) override {
+        actions.push_back({RecordedAction::Kind::Truncate, ""});
         return true;
     }
 };
@@ -97,6 +102,13 @@ pgcdc::ChangeEvent make_delete(const std::string& id) {
     row.kind = pgcdc::TupleKind::Delete;
     row.columns.push_back({"id", false, false, id});
     ev.old_row = row;
+    return ev;
+}
+
+pgcdc::ChangeEvent make_truncate() {
+    pgcdc::ChangeEvent ev;
+    ev.op = pgcdc::ChangeEvent::Op::Truncate;
+    ev.table_name = "test_table";
     return ev;
 }
 
@@ -202,6 +214,25 @@ TEST_SUITE("PgEmbeddingSink::call_batch — insert/delete ordering") {
         }
         CHECK(sink->actions[6].id_value == "201");
         CHECK(sink->actions[9].id_value == "204");
+    }
+
+    TEST_CASE("truncate is applied at its original position, in between upserts before and after it") {
+        auto sink = make_sink();
+
+        std::vector<pgcdc::ChangeEvent> batch = {
+            make_insert("1", "hello"),
+            make_truncate(),
+            make_insert("2", "world"),
+        };
+
+        sink->call_batch(batch);
+
+        REQUIRE(sink->actions.size() == 3);
+        CHECK(sink->actions[0].kind == RecordingPgEmbeddingSink::RecordedAction::Kind::Upsert);
+        CHECK(sink->actions[0].id_value == "1");
+        CHECK(sink->actions[1].kind == RecordingPgEmbeddingSink::RecordedAction::Kind::Truncate);
+        CHECK(sink->actions[2].kind == RecordingPgEmbeddingSink::RecordedAction::Kind::Upsert);
+        CHECK(sink->actions[2].id_value == "2");
     }
 
     TEST_CASE("call() (single-event path) still produces exactly one action, unaffected by batching changes") {

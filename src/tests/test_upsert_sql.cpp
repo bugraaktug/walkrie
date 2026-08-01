@@ -96,4 +96,27 @@ TEST_SUITE("PgSqlBuilder")
 
         CHECK(sql == "DELETE FROM test_embeddings_msource WHERE item_id = $1 AND category = $2");
     }
+
+    TEST_CASE("build_truncate_sql without discriminator deletes the whole sink table")
+    {
+        pgcdc::PgSqlBuilder builder("test_embeddings", "embedding_column");
+        auto tm = make_basic_mapping();
+
+        std::string sql = builder.build_truncate_sql(tm);
+
+        CHECK(sql == "DELETE FROM test_embeddings");
+    }
+
+    TEST_CASE("build_truncate_sql with discriminator scopes the delete to this mapping's rows")
+    {
+        pgcdc::PgSqlBuilder builder("test_embeddings_msource", "embedding_column");
+        auto tm = make_basic_mapping();
+        tm.has_discriminator_ = true;
+        tm.discriminator_sink_ = "category";
+        tm.discriminator_label_ = "documents";
+
+        std::string sql = builder.build_truncate_sql(tm);
+
+        CHECK(sql == "DELETE FROM test_embeddings_msource WHERE category = $1");
+    }
 }

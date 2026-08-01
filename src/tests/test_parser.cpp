@@ -113,7 +113,20 @@ const std::vector<uint8_t> delete_commit = {
     0xf9, 0x67, 0xc1, 0x74, 0xa5, 0xb5
 };
 
-const pgcdc::ColumnValue* find_col(const pgcdc::DecodedRow& row, const std::string& name) 
+// --- Truncate fixtures ---
+const std::vector<uint8_t> truncate_single_msg = {
+    0x54, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x40, 0x11
+};
+const std::vector<uint8_t> truncate_multi_msg = {
+    0x54, 0x00, 0x00, 0x00, 0x02, 0x00,
+    0x00, 0x00, 0x40, 0x11,
+    0x00, 0x00, 0xa1, 0x67
+};
+const std::vector<uint8_t> truncate_unknown_msg = {
+    0x54, 0x00, 0x00, 0x00, 0x01, 0x00, 0xde, 0xad, 0xbe, 0xef
+};
+
+const pgcdc::ColumnValue* find_col(const pgcdc::DecodedRow& row, const std::string& name)
 {
     for (auto& c : row.columns) {
         if (c.name == name) return &c;
@@ -140,26 +153,28 @@ TEST_SUITE("PgOutputParser")
         parser.parse(insert_begin.data(), insert_begin.size());
         parser.parse(relation_msg.data(), relation_msg.size());
 
-        auto event = parser.parse(insert_msg.data(), insert_msg.size());
+        auto result = parser.parse(insert_msg.data(), insert_msg.size());
 
-        REQUIRE(event.has_value());
-        CHECK(event->op == ChangeEvent::Op::Insert);
-        CHECK(event->schema_name == "public");
-        CHECK(event->table_name == "test_table");
-        REQUIRE(event->new_row.has_value());
-        CHECK(!event->old_row.has_value());
-        CHECK(event->commit_timestamp > 0);
+        REQUIRE(result.has_value());
+        REQUIRE(result->size() == 1);
+        auto& event = (*result)[0];
+        CHECK(event.op == ChangeEvent::Op::Insert);
+        CHECK(event.schema_name == "public");
+        CHECK(event.table_name == "test_table");
+        REQUIRE(event.new_row.has_value());
+        CHECK(!event.old_row.has_value());
+        CHECK(event.commit_timestamp > 0);
 
-        auto* id = find_col(*event->new_row, "id");
+        auto* id = find_col(*event.new_row, "id");
         REQUIRE(id != nullptr);
         CHECK(id->text_value == "92");
         CHECK(!id->is_null);
 
-        auto* name = find_col(*event->new_row, "name");
+        auto* name = find_col(*event.new_row, "name");
         REQUIRE(name != nullptr);
         CHECK(name->text_value == "Test Entry92");
 
-        auto* created_at = find_col(*event->new_row, "created_at");
+        auto* created_at = find_col(*event.new_row, "created_at");
         REQUIRE(created_at != nullptr);
         CHECK(created_at->text_value == "2026-07-12 15:12:40.868445");
     }
@@ -176,14 +191,16 @@ TEST_SUITE("PgOutputParser")
         parser.parse(insert_commit.data(), insert_commit.size());
 
         parser.parse(update_begin.data(), update_begin.size());
-        auto event = parser.parse(update_msg.data(), update_msg.size());
+        auto result = parser.parse(update_msg.data(), update_msg.size());
 
-        REQUIRE(event.has_value());
-        CHECK(event->op == ChangeEvent::Op::Update);
-        REQUIRE(event->new_row.has_value());
-        CHECK(!event->old_row.has_value());  // no old tuple sent — REPLICA IDENTITY DEFAULT, PK unchanged
+        REQUIRE(result.has_value());
+        REQUIRE(result->size() == 1);
+        auto& event = (*result)[0];
+        CHECK(event.op == ChangeEvent::Op::Update);
+        REQUIRE(event.new_row.has_value());
+        CHECK(!event.old_row.has_value());  // no old tuple sent — REPLICA IDENTITY DEFAULT, PK unchanged
 
-        auto* name = find_col(*event->new_row, "name");
+        auto* name = find_col(*event.new_row, "name");
         REQUIRE(name != nullptr);
         CHECK(name->text_value == "Updated Title for entry 92");
     }
@@ -194,23 +211,25 @@ TEST_SUITE("PgOutputParser")
         parser.parse(delete_begin.data(), delete_begin.size());
         parser.parse(relation_msg.data(), relation_msg.size());  // fresh session — Relation re-sent
 
-        auto event = parser.parse(delete_msg.data(), delete_msg.size());
+        auto result = parser.parse(delete_msg.data(), delete_msg.size());
 
-        REQUIRE(event.has_value());
-        CHECK(event->op == ChangeEvent::Op::Delete);
-        REQUIRE(event->old_row.has_value());
-        CHECK(!event->new_row.has_value());
+        REQUIRE(result.has_value());
+        REQUIRE(result->size() == 1);
+        auto& event = (*result)[0];
+        CHECK(event.op == ChangeEvent::Op::Delete);
+        REQUIRE(event.old_row.has_value());
+        CHECK(!event.new_row.has_value());
 
-        auto* id = find_col(*event->old_row, "id");
+        auto* id = find_col(*event.old_row, "id");
         REQUIRE(id != nullptr);
         CHECK(!id->is_null);
         CHECK(id->text_value == "92");
 
-        auto* name = find_col(*event->old_row, "name");
+        auto* name = find_col(*event.old_row, "name");
         REQUIRE(name != nullptr);
         CHECK(name->is_null);  // not part of replica identity key — sent as null
 
-        auto* created_at = find_col(*event->old_row, "created_at");
+        auto* created_at = find_col(*event.old_row, "created_at");
         REQUIRE(created_at != nullptr);
         CHECK(created_at->is_null);
     }
@@ -231,43 +250,92 @@ TEST_SUITE("PgOutputParser")
         parser.parse(full_update_begin.data(), full_update_begin.size());
         parser.parse(full_relation_msg.data(), full_relation_msg.size());
 
-        auto event = parser.parse(full_update_msg.data(), full_update_msg.size());
+        auto result = parser.parse(full_update_msg.data(), full_update_msg.size());
 
-        REQUIRE(event.has_value());
-        CHECK(event->op == pgcdc::ChangeEvent::Op::Update);
-        CHECK(event->schema_name == "public");
-        CHECK(event->table_name == "documents");
-        REQUIRE(event->old_row.has_value());
-        REQUIRE(event->new_row.has_value());
+        REQUIRE(result.has_value());
+        REQUIRE(result->size() == 1);
+        auto& event = (*result)[0];
+        CHECK(event.op == pgcdc::ChangeEvent::Op::Update);
+        CHECK(event.schema_name == "public");
+        CHECK(event.table_name == "documents");
+        REQUIRE(event.old_row.has_value());
+        REQUIRE(event.new_row.has_value());
 
-        auto* old_title = find_col(*event->old_row, "title");
+        auto* old_title = find_col(*event.old_row, "title");
         REQUIRE(old_title != nullptr);
         CHECK(old_title->text_value == "First doc");
 
-        auto* new_title = find_col(*event->new_row, "title");
+        auto* new_title = find_col(*event.new_row, "title");
         REQUIRE(new_title != nullptr);
         CHECK(new_title->text_value == "Updated title");
 
-        auto* old_body = find_col(*event->old_row, "body");
+        auto* old_body = find_col(*event.old_row, "body");
         REQUIRE(old_body != nullptr);
         CHECK(old_body->text_value == "Some body text");
 
-        auto* new_body = find_col(*event->new_row, "body");
+        auto* new_body = find_col(*event.new_row, "body");
         REQUIRE(new_body != nullptr);
         CHECK(new_body->text_value == "A new body for id 7");
 
         // id and updated_at unchanged between old/new tuples in this capture
-        auto* old_id = find_col(*event->old_row, "id");
-        auto* new_id = find_col(*event->new_row, "id");
+        auto* old_id = find_col(*event.old_row, "id");
+        auto* new_id = find_col(*event.new_row, "id");
         REQUIRE(old_id != nullptr);
         REQUIRE(new_id != nullptr);
         CHECK(old_id->text_value == "7");
         CHECK(new_id->text_value == "7");
 
-        auto* old_updated = find_col(*event->old_row, "updated_at");
-        auto* new_updated = find_col(*event->new_row, "updated_at");
+        auto* old_updated = find_col(*event.old_row, "updated_at");
+        auto* new_updated = find_col(*event.new_row, "updated_at");
         REQUIRE(old_updated != nullptr);
         REQUIRE(new_updated != nullptr);
         CHECK(old_updated->text_value == new_updated->text_value);
+    }
+
+    TEST_CASE("Truncate naming one known relation produces a single Truncate ChangeEvent")
+    {
+        PgOutputParser parser;
+        parser.parse(insert_begin.data(), insert_begin.size());
+        parser.parse(relation_msg.data(), relation_msg.size());
+
+        auto result = parser.parse(truncate_single_msg.data(), truncate_single_msg.size());
+
+        REQUIRE(result.has_value());
+        REQUIRE(result->size() == 1);
+        auto& event = (*result)[0];
+        CHECK(event.op == ChangeEvent::Op::Truncate);
+        CHECK(event.schema_name == "public");
+        CHECK(event.table_name == "test_table");
+        CHECK(!event.old_row.has_value());
+        CHECK(!event.new_row.has_value());
+        CHECK(event.commit_timestamp > 0);
+    }
+
+    TEST_CASE("Truncate naming several relations (e.g. CASCADE) produces one event per relation")
+    {
+        PgOutputParser parser;
+        parser.parse(insert_begin.data(), insert_begin.size());
+        parser.parse(relation_msg.data(), relation_msg.size());
+        parser.parse(full_relation_msg.data(), full_relation_msg.size());
+
+        auto result = parser.parse(truncate_multi_msg.data(), truncate_multi_msg.size());
+
+        REQUIRE(result.has_value());
+        REQUIRE(result->size() == 2);
+        CHECK((*result)[0].op == ChangeEvent::Op::Truncate);
+        CHECK((*result)[0].table_name == "test_table");
+        CHECK((*result)[1].op == ChangeEvent::Op::Truncate);
+        CHECK((*result)[1].table_name == "documents");
+    }
+
+    TEST_CASE("Truncate naming an unknown relation is skipped, not thrown, and yields an empty (but present) vector")
+    {
+        PgOutputParser parser;
+        parser.parse(insert_begin.data(), insert_begin.size());
+
+        auto result = parser.parse(truncate_unknown_msg.data(), truncate_unknown_msg.size());
+
+        REQUIRE(result.has_value());  // Truncate is an event-producing message type...
+        CHECK(result->empty());      // ...it just didn't resolve any relation this time
     }
 }

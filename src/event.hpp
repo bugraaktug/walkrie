@@ -54,20 +54,21 @@ struct DecodedRow
 // and Update as a pair (old + new) so the caller (week 2) can diff them.
 struct ChangeEvent
 {
-    enum class Op { Insert, Update, Delete } op;
+    enum class Op { Insert, Update, Delete, Truncate } op;
     std::string schema_name;
     std::string table_name;
     std::optional<DecodedRow> old_row;  // present for Update (if REPLICA IDENTITY FULL) and Delete
     std::optional<DecodedRow> new_row;  // present for Insert and Update
     uint64_t commit_lsn = 0;            // the LSN to acknowledge once this event is durably handled
     uint64_t commit_timestamp = 0;      // transaction commit time, microseconds since Unix epoch
-    
+
     static std::string to_string(const Op& k)
     {
         switch (k) {
             case Op::Insert: return "insert";
             case Op::Update: return "update";
             case Op::Delete: return "delete";
+            case Op::Truncate: return "truncate";
         }
         return "unhandled";
     }

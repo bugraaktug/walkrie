@@ -76,4 +76,14 @@ std::string PgSqlBuilder::build_delete_sql(const TableMapping& tm) const
     return sql.str();
 }
 
+std::string PgSqlBuilder::build_truncate_sql(const TableMapping& tm) const
+{
+    std::ostringstream sql;
+    sql << "DELETE FROM " << sink_table_;
+    if (tm.has_discriminator_) {
+        sql << " WHERE " << tm.discriminator_sink_ << " = $1";
+    }
+    return sql.str();
+}
+
 } // namespace pgcdc

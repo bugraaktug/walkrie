@@ -230,10 +230,12 @@ void PgReplicationSource::drain_available_messages()
                             config_.slot_name.c_str());
            } else {
                try {
-                   auto event = parser_.parse(header->payload, header->payload_len);
-                   if (event) {
-                       event->commit_lsn = header->wal_start;
-                       handle_(*event);
+                   auto events = parser_.parse(header->payload, header->payload_len);
+                   if (events) {
+                       for (auto& event : *events) {
+                           event.commit_lsn = header->wal_start;
+                           handle_(event);
+                       }
                    }
                 } catch (const std::exception& e) {
                     spdlog::error("[PgReplicationSource] [{}] error decoding message at LSN {}: {} (skipping)",

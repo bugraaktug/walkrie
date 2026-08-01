@@ -23,8 +23,7 @@ void EventDispatcher::post_job(pgcdc::EventJob job)
 void EventDispatcher::process_jobs()
 {
     spdlog::info("[EventDispatcher] started processing events, batch_size={}, batch_timeout_ms={}",
-             max_batch_size_,
-             batch_timeout_.count());
+                 max_batch_size_, batch_timeout_.count());
     pgcdc::EventJob current_job;
     while (running_.load(std::memory_order_acquire)) {
         if (!queue_.wait_dequeue_timed(current_job, std::chrono::milliseconds(200))) {

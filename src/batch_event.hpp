@@ -9,7 +9,7 @@ namespace pgcdc
 
 struct BatchEvent
 {
-    enum class Kind { Upsert, Delete };
+    enum class Kind { Upsert, Delete, Truncate };
 
     Kind kind = Kind::Upsert;
     const TableMapping* tm = nullptr;
