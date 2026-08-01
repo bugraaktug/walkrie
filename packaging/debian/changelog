@@ -1,3 +1,19 @@
+walkrie (1.1.1~alpha1-1) unstable; urgency=low
+
+  * Fixed a silent data gap: TRUNCATE (including CASCADE) on a watched
+    source table previously produced no ChangeEvent at all, leaving the
+    corresponding sink rows behind indefinitely. pgoutput_parser now
+    decodes Truncate messages, emitting one ChangeEvent per relation
+    named in the message (a single CASCADE truncate can name several).
+    PgEmbeddingSink applies each as a bulk DELETE against the sink table,
+    scoped to that table mapping's discriminator when one is configured;
+    without a discriminator, the delete has no WHERE clause and removes
+    every row in the (shared) sink table — logged as a warning. See
+    TECHNICAL.md's Decode Layer / Sink Layer sections and the "Note on
+    TRUNCATE" under discriminator config for details.
+
+ -- bugra <bugraaktug@gmail.com>  Sat, 01 Aug 2026 12:00:00 +0300
+
 walkrie (1.1.0~alpha1-1) unstable; urgency=low
 
   * Docker packaging: multi-stage Dockerfile (statically-linked llama.cpp,

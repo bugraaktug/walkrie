@@ -41,10 +41,11 @@ This document describes the internal architecture of Walkrie's PostgreSQL-to-vec
 
 ### 3. Decode Layer (`pgoutput` Parser)
 
-* Decodes `Begin`, `Relation`, `Insert`, `Update`, `Delete`, and `Commit` messages per the PostgreSQL logical replication protocol.
-* Maintains a relation (table schema) cache keyed by relation OID, since `Insert`/`Update`/`Delete` messages carry only column values, not names — the schema is sent once via a `Relation` message and cached client-side.
+* Decodes `Begin`, `Relation`, `Insert`, `Update`, `Delete`, `Truncate`, and `Commit` messages per the PostgreSQL logical replication protocol.
+* Maintains a relation (table schema) cache keyed by relation OID, since `Insert`/`Update`/`Delete`/`Truncate` messages carry only relation OIDs (and, for DML, column values), not names — the schema is sent once via a `Relation` message and cached client-side.
 * Supports both `REPLICA IDENTITY DEFAULT` (key-only old-tuple data on Delete, no old-tuple on Update unless the key changed) and `REPLICA IDENTITY FULL` (complete old-tuple data on Update and Delete).
 * Propagates transaction `commit_timestamp` (decoded from the `Begin` message) onto every `ChangeEvent`, used downstream for replication-lag measurement.
+* **`Truncate` fan-out** — a single `Truncate` WAL message can name several relations at once (e.g. `TRUNCATE parent CASCADE`), so `PgOutputParser::parse()` returns `std::optional<std::vector<ChangeEvent>>` rather than a single event: `std::nullopt` for message types that never produce events (`Begin`/`Commit`/`Relation`/`Type`/`Origin`), and a vector — one `ChangeEvent::Op::Truncate` per resolvable relation — for `Insert`/`Update`/`Delete`/`Truncate`. A relation OID in a `Truncate` message that isn't in the relation cache is logged and skipped rather than throwing, so one unresolvable relation in a multi-table `CASCADE` doesn't drop the events for the others in the same message.
 
 ### 4. Sink Layer
 
@@ -54,6 +55,7 @@ This document describes the internal architecture of Walkrie's PostgreSQL-to-vec
 * **Pluggable embedding providers** — a common `EmbeddingProvider` interface abstracts over local (`llama.cpp`) and remote (OpenAI HTTP API) backends; new providers implement `init()`, `embed()`, `dimensions()`, and `name()`. Providers additionally expose `embed_batch()`, defaulting to a loop over `embed()` for providers that haven't implemented real batching — `OpenAIProvider` overrides this with a genuine single-request batched call (`"input": [text1, text2, ...]`); `LlamaProvider` now overrides it too, with a real multi-sequence `llama_encode()` call (see Known Limitations below for the measured performance and correctness findings).
 * **Pluggable sink types** — a `SinkConfiguration` interface (`postgres-embedding`, `json-output`) allows multiple sink blocks in one config, each independently constructing and owning its runtime `EventSink`. `EventSink` similarly exposes `call_batch()`, defaulting to a loop over `call()`; `PgEmbeddingSink` overrides it with real batching (below).
 * **Batched upsert ordering (`PgEmbeddingSink::call_batch`)** — validates every event in a batch first (skip-unchanged checks, null/empty-field checks — no database writes yet), collects everything needing an embedding into one `embed_batch()` call, then applies every resulting action (upserts *and* deletes) in a second pass, strictly preserving the batch's original event order. This ordering guarantee matters concretely: if an insert and a delete for the same row land in the same batch, applying them out of original order (e.g. running the delete immediately during validation, before a same-batch insert has been upserted) can silently resurrect a row that should have ended up deleted. The two-pass design exists specifically to prevent that. Covered by both a unit test (`test_pgembedding_sink_batch_ordering.cpp`) and a live-database integration test (see Testing below).
+* **`TRUNCATE` handling** — a `Truncate` event runs a bulk `DELETE` against the sink table instead of the per-row keyed delete used for `Delete` events, since a truncated source table carries no row identifiers to key off. When the table mapping has a `discriminator_column` configured, the delete is scoped to that mapping's `discriminator_label` (`DELETE FROM <sink> WHERE <discriminator> = <label>`); without one, there is no column that identifies which sink rows came from which source table, so the delete has no `WHERE` clause at all and removes every row in the sink table — logged as a warning at execution time. `TRUNCATE ... CASCADE` on a watched table's dependents is handled the same way, one bulk delete per relation named in the WAL message (see Decode Layer above). Same two-pass ordering as upserts/deletes: a truncate is applied at its original position in the batch, not deferred or reordered relative to same-batch inserts/deletes for other tables.
 
 ## Known Limitations
 
@@ -265,6 +267,8 @@ n_ctx      = 512
 
 **Note on `discriminator_column`:** the discriminator column must exist as part of a real unique constraint on the sink table — otherwise different mappings will generate mismatched `ON CONFLICT` targets (e.g. some as `(item_id)`, others as `(item_id, category)`), and Postgres will reject whichever ones don't match the actual constraint on the table.
 
+**Note on `TRUNCATE`:** the discriminator also scopes what a `TRUNCATE` on a mapped source table deletes from the shared sink table. If `test_table` above is truncated, only rows with `category = 'test'` are removed — `documents`' rows are untouched. If a mapping shares a sink table with others but has no `discriminator_column` configured, a `TRUNCATE` on that mapping's source table deletes **every** row in the sink table, including rows written by the other mappings — configure a discriminator on every mapping that shares a sink table if this matters for your deployment.
+
 ### Multiple sink blocks
 
 More than one `[[sink]]` block can be declared — e.g. a `postgres-embedding` sink alongside a `json-output` debug sink:
@@ -331,7 +335,7 @@ usage: walkrie -c <config.toml> [-f] [--pid-file <path>]
 
 ### Unit tests (`walkrie_tests`, doctest, no live DB required)
 
-Covers WAL frame parsing, `pgoutput` message decoding, SQL builder output, config validation (including the model_path existence/readability/non-empty checks), `EventDispatcher`'s batching/timeout grouping behavior, and `PgEmbeddingSink::call_batch()`'s insert/delete-same-batch ordering guarantee via a recording test double (no real database connection needed for this specific test, since it only asserts the *order* of `upsert()`/`remove()` calls, not their SQL effects).
+Covers WAL frame parsing, `pgoutput` message decoding (including `Truncate` — single-relation, multi-relation `CASCADE` fan-out, and the skip-unknown-relation case), SQL builder output (including `build_truncate_sql`'s discriminator-scoped vs. whole-table-delete forms), config validation (including the model_path existence/readability/non-empty checks), `EventDispatcher`'s batching/timeout grouping behavior, and `PgEmbeddingSink::call_batch()`'s insert/delete-same-batch and truncate ordering guarantees via a recording test double (no real database connection needed for this specific test, since it only asserts the *order* of `upsert()`/`remove()`/`truncate()` calls, not their SQL effects).
 
 ```bash
 ./walkrie_tests
