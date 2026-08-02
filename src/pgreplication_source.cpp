@@ -181,6 +181,9 @@ void PgReplicationSource::ping_update()
     put_u64(confirmed); // last flushed
     put_u64(confirmed); // last applied
 
+    spdlog::trace("[PgReplicationSource] [{}] sending standby status update, confirmed_lsn={}",
+                  config_.slot_name.c_str(), format_lsn(confirmed).c_str());
+
     constexpr uint64_t kPgEpochOffsetSecs = 946684800ULL; // 2000-01-01 vs unix epoch
     uint64_t now_us = (static_cast<uint64_t>(std::time(nullptr)) - kPgEpochOffsetSecs) * 1000000ULL;
     put_u64(now_us);

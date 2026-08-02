@@ -131,6 +131,13 @@ target_include_directories(test_sink_dims_check PRIVATE
 target_link_libraries(test_sink_dims_check PRIVATE
     walkrie_core)
 
+add_executable(test_lsn_confirm
+    src/tests/integration/test_lsn_confirm.cpp)
+target_include_directories(test_lsn_confirm PRIVATE
+    src src/include src/third_party)
+target_link_libraries(test_lsn_confirm PRIVATE
+    walkrie_core)
+
 # --- end to end bench ---
 add_executable(walkrie_bench
     src/bench/walkrie_bench.cpp
