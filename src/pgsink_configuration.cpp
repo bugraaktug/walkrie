@@ -30,6 +30,8 @@ void PgSinkConfiguration::load_from_config(const toml::table& t)
     table    = str_or(&t, "table",    table);
     embedding_column = str_or(&t, "embed_column", embedding_column);
 
+    if (auto req = t.get_as<bool>("required")) required_override = **req;
+
     if (auto* tm_arr = t["table_mapping"].as_array()) {
         for (auto& tm_elem : *tm_arr) {
             TableMapping tm;

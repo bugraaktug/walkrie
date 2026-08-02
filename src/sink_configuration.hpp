@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 #include <toml.hpp>
@@ -20,6 +21,8 @@ public:
     virtual void load_from_config(const toml::table& t) = 0;
     virtual std::vector<std::string> validate() const = 0;
     virtual std::shared_ptr<EventSink> create_sink(const EmbeddingConfig& embedding_cfg) const = 0;
+
+    std::optional<bool> required_override; // <<< from `required =` in [[sink]]; unset falls back to EventSink::default_required()
 };
 
 std::unique_ptr<SinkConfiguration> instantiate_sink(const std::string& type);

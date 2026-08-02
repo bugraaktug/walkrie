@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <ctime>
 #include <string>
 
@@ -24,10 +25,10 @@ struct PgReplicationConfig
     std::string to_conninfo() const;
 };
 
-class PgReplicationSource : public ReplicationSource 
+class PgReplicationSource : public ReplicationSource
 {
 public:
-    explicit PgReplicationSource(PgReplicationConfig config);
+    explicit PgReplicationSource(SourceId id, PgReplicationConfig config);
     ~PgReplicationSource() override;
 
     // Non-copyable (owns a raw PGconn*), movable not needed for current use.
@@ -38,6 +39,7 @@ public:
     bool start_streaming() override;
     bool register_event_loop(event_base* base, ChangeEventFn handle) override;
     std::string last_error() const override;
+    void set_confirmed_lsn(uint64_t lsn) override;
 
 protected:
     void ping_update();
@@ -48,7 +50,8 @@ private:
     PGconn* conn_ = nullptr;
     std::string last_error_;
     std::string start_lsn_ = "0/0";
-    uint64_t last_lsn_ = 0;
+    uint64_t last_read_lsn_ = 0;             // stream position we've parsed up to (not yet durably sunk)
+    std::atomic<uint64_t> confirmed_lsn_{0}; // durably sunk position, reported to Postgres via ping_update()
     std::time_t last_status_update_ = 0;
     PgOutputParser parser_;
     ChangeEventFn handle_;

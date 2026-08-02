@@ -214,7 +214,7 @@ TEST_SUITE("EventDispatcher batching")
         CHECK(sink_a->batch_sizes() == sink_b->batch_sizes());
     }
 
-    TEST_CASE("a throwing sink's call_batch does not prevent other sinks or subsequent batches") 
+    TEST_CASE("a throwing best-effort sink's call_batch does not prevent other sinks or subsequent batches")
     {
         pgcdc::EventDispatcher dispatcher(3, std::chrono::milliseconds(100));
         auto bad_sink  = std::make_shared<ThrowingBatchSink>();
@@ -223,7 +223,7 @@ TEST_SUITE("EventDispatcher batching")
         for (uint64_t lsn = 0; lsn < 5; ++lsn) {
             pgcdc::EventJob job;
             job.ev = make_test_event(lsn);
-            job.sinks = {bad_sink, good_sink};
+            job.sinks = {pgcdc::SinkHandle(bad_sink, /*required=*/false), good_sink};
             dispatcher.post_job(std::move(job));
         }
 

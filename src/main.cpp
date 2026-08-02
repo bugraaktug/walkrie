@@ -1,5 +1,7 @@
+#include <atomic>
 #include <iostream>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 #include <csignal>
 #include <getopt.h>
@@ -91,18 +93,28 @@ void init_logger(const pgcdc::AppSettings& settings)
     }
 }
 
-struct SignalHandle 
+struct SignalHandle
 {
     event_base* base;
     std::string pid_file;
     bool daemonized;
+    std::atomic<bool>* terminate = nullptr;
 };
 
-void on_shutdown_signal(evutil_socket_t sig, short, void* arg) 
+void on_shutdown_signal(evutil_socket_t sig, short, void* arg)
 {
     auto* ctx = static_cast<SignalHandle*>(arg);
     spdlog::info("Walkrie received signal {} — shutting down", sig);
     event_base_loopbreak(ctx->base);
+}
+
+void on_terminate_poll(evutil_socket_t, short, void* arg)
+{
+    auto* ctx = static_cast<SignalHandle*>(arg);
+    if (ctx->terminate->load(std::memory_order_acquire)) {
+        spdlog::critical("Walkrie shutting down — a required sink stalled past its retry ceiling");
+        event_base_loopbreak(ctx->base);
+    }
 }
 
 int main(int argc, char** argv) 
@@ -149,17 +161,24 @@ int main(int argc, char** argv)
     
     // Graceful shutdown on SIGTERM (systemctl stop / kill) and SIGINT
     // (Ctrl-C in foreground mode).
-    SignalHandle sig_hnd{ base, opts.pid_file, !opts.foreground };
+    std::atomic<bool> terminate{false};
+    SignalHandle sig_hnd{ base, opts.pid_file, !opts.foreground, &terminate };
     event* sigterm_ev = evsignal_new(base, SIGTERM, on_shutdown_signal, &sig_hnd);
     event* sigint_ev  = evsignal_new(base, SIGINT,  on_shutdown_signal, &sig_hnd);
     event_add(sigterm_ev, nullptr);
     event_add(sigint_ev, nullptr);
+
+    // Polls `terminate` 200ms adds negligible shutdown latency.
+    event* terminate_poll_ev = event_new(base, -1, EV_PERSIST, on_terminate_poll, &sig_hnd);
+    timeval terminate_poll_interval{0, 200000};
+    event_add(terminate_poll_ev, &terminate_poll_interval);
 
     auto dispatcher = std::make_unique<pgcdc::EventDispatcher>(
             cfg.settings.batch_size,
             std::chrono::milliseconds(cfg.settings.batch_timeout_ms));
 
     std::vector<std::unique_ptr<pgcdc::PgReplicationSource>> sources;
+    SourceId next_source_id = 1;
     for (const auto& src : cfg.sources) {
         pgcdc::PgReplicationConfig src_config;
 	    src_config.host             = src.host;
@@ -169,20 +188,27 @@ int main(int argc, char** argv)
     	src_config.password         = src.password;
     	src_config.slot_name        = src.slot_name;
     	src_config.publication_name = src.publication;
-    	sources.push_back(std::make_unique<pgcdc::PgReplicationSource>(src_config));
+    	sources.push_back(std::make_unique<pgcdc::PgReplicationSource>(next_source_id++, src_config));
     }
 
-    std::vector<std::shared_ptr<pgcdc::EventSink>> sinks;
+    std::unordered_map<SourceId, pgcdc::ReplicationSource*> source_by_id;
+    for (auto& source : sources) {
+        source_by_id[source->id()] = source.get();
+    }    
+ 
+    std::vector<pgcdc::SinkHandle> sinks;
     try {
         for (const auto& sink_instance : cfg.sinks) {
             auto sink = sink_instance->create_sink(cfg.embedding);
-            sinks.push_back(sink);
+            bool required = sink_instance->required_override.value_or(sink->default_required());
+            sinks.emplace_back(sink, required);
         }
     } catch (const std::exception& e) {
         spdlog::critical("Fatal: failed to initialize sink/embedding provider: {}", e.what());
         dispatcher.reset();
         event_free(sigterm_ev);
         event_free(sigint_ev);
+        event_free(terminate_poll_ev);
         event_base_free(base);
         
         pgcdc::http_global_cleanup();
@@ -193,13 +219,24 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    auto dispatch_handle = [&](const pgcdc::ChangeEvent& event) {
+    dispatcher->set_on_fatal([&terminate] {
+        terminate.store(true, std::memory_order_release);
+    });
+
+    dispatcher->set_on_confirmed([&source_by_id](SourceId id, uint64_t lsn) {
+        if (auto it = source_by_id.find(id); it != source_by_id.end()) {
+            it->second->set_confirmed_lsn(lsn);
+        }
+    });
+
+    auto dispatch_handle = [&](const pgcdc::ChangeEvent& event, SourceId source_id) {
 	    pgcdc::EventJob job;
 	    job.ev = event;
+	    job.source_id = source_id;
 	    job.sinks = sinks;
 	    dispatcher->post_job(std::move(job));
     };
-
+   
     for (auto& source : sources) {
         if (!source->connect()) {
             std::cerr << "Source connection failed: " << source->last_error() << "\n";
@@ -235,17 +272,18 @@ int main(int argc, char** argv)
         spdlog::info("Finalizing source streaming - {}", source->last_error());
     }
 
+    dispatcher.reset();
     sources.clear();
     event_free(sigterm_ev);
     event_free(sigint_ev);
+    event_free(terminate_poll_ev);
     event_base_free(base);
-    
+
     pgcdc::http_global_cleanup();
     if (!opts.foreground) {
         pgcdc::remove_pid_file(opts.pid_file);
     }
 
-    dispatcher.reset();
     sinks.clear();
 
     spdlog::info("Walkrie shutdown complete.");

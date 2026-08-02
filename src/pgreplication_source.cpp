@@ -48,8 +48,8 @@ std::string PgReplicationConfig::to_conninfo() const
     return out.str();
 }
 
-PgReplicationSource::PgReplicationSource(PgReplicationConfig config)
-    : config_(std::move(config)) {}
+PgReplicationSource::PgReplicationSource(SourceId id, PgReplicationConfig config)
+    : ReplicationSource(id), config_(std::move(config)) {}
 
 PgReplicationSource::~PgReplicationSource() 
 {
@@ -124,9 +124,15 @@ bool PgReplicationSource::connect()
         resume_slot();
     }
 
-    last_lsn_ = parse_lsn(start_lsn_);
+    last_read_lsn_ = parse_lsn(start_lsn_);
+    confirmed_lsn_.store(last_read_lsn_, std::memory_order_relaxed);
     last_status_update_ = std::time(nullptr);
     return true;
+}
+
+void PgReplicationSource::set_confirmed_lsn(uint64_t lsn)
+{
+    confirmed_lsn_.store(lsn, std::memory_order_release);
 }
 
 bool PgReplicationSource::start_streaming() 
@@ -164,9 +170,10 @@ void PgReplicationSource::ping_update()
         for (int i = 7; i >= 0; --i) *p++ = static_cast<unsigned char>((v >> (i * 8)) & 0xFF);
     };
 
-    put_u64(last_lsn_); // last written
-    put_u64(last_lsn_); // last flushed
-    put_u64(last_lsn_); // last applied
+    uint64_t confirmed = confirmed_lsn_.load(std::memory_order_acquire);
+    put_u64(confirmed); // last written
+    put_u64(confirmed); // last flushed
+    put_u64(confirmed); // last applied
 
     constexpr uint64_t kPgEpochOffsetSecs = 946684800ULL; // 2000-01-01 vs unix epoch
     uint64_t now_us = (static_cast<uint64_t>(std::time(nullptr)) - kPgEpochOffsetSecs) * 1000000ULL;
@@ -234,17 +241,17 @@ void PgReplicationSource::drain_available_messages()
                    if (events) {
                        for (auto& event : *events) {
                            event.commit_lsn = header->wal_start;
-                           handle_(event);
+                           handle_(event, id());
                        }
                    }
                 } catch (const std::exception& e) {
                     spdlog::error("[PgReplicationSource] [{}] error decoding message at LSN {}: {} (skipping)",
-                            config_.slot_name.c_str(), 
-                            format_lsn(header->wal_start).c_str(), 
+                            config_.slot_name.c_str(),
+                            format_lsn(header->wal_start).c_str(),
                             e.what());
                 }
            }
-           last_lsn_ = header->wal_start;
+           last_read_lsn_ = header->wal_start;
        }
        PQfreemem(buf);
    }

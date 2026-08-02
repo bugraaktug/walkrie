@@ -93,7 +93,7 @@ int main(int argc, char** argv)
     // (json vs pg), not measuring a multi-sink fan-out.
     auto real_sink = cfg.sinks.front()->create_sink(cfg.embedding);
     auto bench_sink = std::make_shared<pgcdc::bench::BenchmarkingSink>(real_sink, lag_stats);
-    std::vector<std::shared_ptr<pgcdc::EventSink>> sinks{ bench_sink };
+    std::vector<pgcdc::SinkHandle> sinks{ bench_sink };
 
     pgcdc::http_global_init();
     event_base* base = event_base_new();
@@ -107,6 +107,7 @@ int main(int argc, char** argv)
     pgcdc::EventDispatcher dispatcher;
 
     std::vector<std::unique_ptr<pgcdc::PgReplicationSource>> sources;
+    SourceId next_source_id = 1;
     for (const auto& src : cfg.sources) {
         pgcdc::PgReplicationConfig src_config;
         src_config.host             = src.host;
@@ -116,12 +117,13 @@ int main(int argc, char** argv)
         src_config.password         = src.password;
         src_config.slot_name        = src.slot_name;
         src_config.publication_name = src.publication;
-        sources.push_back(std::make_unique<pgcdc::PgReplicationSource>(src_config));
+        sources.push_back(std::make_unique<pgcdc::PgReplicationSource>(next_source_id++, src_config));
     }
 
-    auto dispatch_handle = [&](const pgcdc::ChangeEvent& event) {
+    auto dispatch_handle = [&](const pgcdc::ChangeEvent& event, SourceId source_id) {
         pgcdc::EventJob job;
         job.ev = event;
+        job.source_id = source_id;
         job.sinks = sinks;
         dispatcher.post_job(std::move(job));
     };
