@@ -40,6 +40,7 @@ public:
     bool register_event_loop(event_base* base, ChangeEventFn handle) override;
     std::string last_error() const override;
     void set_confirmed_lsn(uint64_t lsn) override;
+    void flush_confirmed_lsn() override;
 
 protected:
     void ping_update();

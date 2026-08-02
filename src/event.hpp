@@ -54,7 +54,7 @@ struct DecodedRow
 // and Update as a pair (old + new) so the caller (week 2) can diff them.
 struct ChangeEvent
 {
-    enum class Op { Insert, Update, Delete, Truncate } op;
+    enum class Op { Insert, Update, Delete, Truncate, Commit } op; // <<< Commit carries no row data, just the transaction's real commit LSN; sinks that don't care about it should skip it
     std::string schema_name;
     std::string table_name;
     std::optional<DecodedRow> old_row;  // present for Update (if REPLICA IDENTITY FULL) and Delete
@@ -69,6 +69,7 @@ struct ChangeEvent
             case Op::Update: return "update";
             case Op::Delete: return "delete";
             case Op::Truncate: return "truncate";
+            case Op::Commit: return "commit";
         }
         return "unhandled";
     }

@@ -135,6 +135,12 @@ void PgReplicationSource::set_confirmed_lsn(uint64_t lsn)
     confirmed_lsn_.store(lsn, std::memory_order_release);
 }
 
+void PgReplicationSource::flush_confirmed_lsn()
+{
+    if (!conn_) return; // <<< never connected; nothing to flush
+    ping_update();
+}
+
 bool PgReplicationSource::start_streaming() 
 {
     if (!conn_) {

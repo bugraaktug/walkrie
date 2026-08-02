@@ -166,6 +166,8 @@ void PgEmbeddingSink::call_batch(const std::vector<ChangeEvent>& events) {
     // Pass 1: validate every event and record what needs to happen, in
     // ORIGINAL event order — no database writes here.
     for (const auto& event : events) {
+        if (event.op == ChangeEvent::Op::Commit) continue; // <<< no row data; only carries the transaction's LSN through confirm tracking
+
         const TableMapping* tm = nullptr;
         for (const auto& m : config_.mappings) {
             if (m.source_table == event.table_name) { tm = &m; break; }
@@ -209,6 +211,8 @@ void PgEmbeddingSink::call_batch(const std::vector<ChangeEvent>& events) {
                 batch.push_back(std::move(be));
                 break;
             }
+            case ChangeEvent::Op::Commit:
+                break; // <<< unreachable — skipped at the top of this loop; case kept for switch exhaustiveness
         }
     }
 

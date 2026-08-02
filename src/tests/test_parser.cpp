@@ -139,12 +139,20 @@ const pgcdc::ColumnValue* find_col(const pgcdc::DecodedRow& row, const std::stri
 TEST_SUITE("PgOutputParser") 
 {
 
-    TEST_CASE("Begin/Relation/Commit messages return nullopt") 
+    TEST_CASE("Begin/Relation messages return nullopt")
     {
         PgOutputParser parser;
         CHECK(!parser.parse(insert_begin.data(), insert_begin.size()).has_value());
         CHECK(!parser.parse(relation_msg.data(), relation_msg.size()).has_value());
-        CHECK(!parser.parse(insert_commit.data(), insert_commit.size()).has_value());
+    }
+
+    TEST_CASE("Commit message yields a single Op::Commit marker event")
+    {
+        PgOutputParser parser;
+        auto result = parser.parse(insert_commit.data(), insert_commit.size());
+        REQUIRE(result.has_value());
+        REQUIRE(result->size() == 1);
+        CHECK((*result)[0].op == ChangeEvent::Op::Commit);
     }
 
     TEST_CASE("Insert produces ChangeEvent with new_row populated") 
@@ -234,14 +242,14 @@ TEST_SUITE("PgOutputParser")
         CHECK(created_at->is_null);
     }
 
-    TEST_CASE("full transaction sequence produces exactly one event per DML message") 
+    TEST_CASE("full transaction sequence: Begin/Relation are silent, Insert and Commit each yield one event")
     {
         PgOutputParser parser;
         int events = 0;
         for (auto& msg : {insert_begin, relation_msg, insert_msg, insert_commit}) {
             if (parser.parse(msg.data(), msg.size()).has_value()) ++events;
         }
-        CHECK(events == 1);  // only the Insert message should yield a ChangeEvent
+        CHECK(events == 2);  // Insert yields the row-change event; Commit yields the marker carrying the transaction's real commit LSN
     }
 
     TEST_CASE("Update with REPLICA IDENTITY FULL produces both old_row and new_row") 

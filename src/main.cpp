@@ -272,7 +272,11 @@ int main(int argc, char** argv)
         spdlog::info("Finalizing source streaming - {}", source->last_error());
     }
 
-    dispatcher.reset();
+    dispatcher.reset(); // joins the worker thread — drain_remaining() has already run and updated confirmed_lsn_ per source
+
+    for (auto& source : sources) {
+        source->flush_confirmed_lsn(); // periodic timer won't fire again post-loopbreak; send the final ack now
+    }
     sources.clear();
     event_free(sigterm_ev);
     event_free(sigint_ev);

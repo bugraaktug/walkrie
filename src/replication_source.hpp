@@ -26,6 +26,7 @@ public:
     virtual bool register_event_loop(event_base* base, ChangeEventFn handle) = 0;
     virtual std::string last_error() const = 0;
     virtual void set_confirmed_lsn(uint64_t lsn) = 0;
+    virtual void flush_confirmed_lsn() = 0; // <<< best-effort final ack to the origin; call once after the dispatcher has drained on shutdown
 
 private:
     SourceId id_;

@@ -145,11 +145,16 @@ std::optional<std::vector<ChangeEvent>> PgOutputParser::parse(const uint8_t* dat
             handle_begin(p, static_cast<size_t>(end -p));
             return std::nullopt;
 
-        case 'C': // Commit
-            // flags(1) + commit_lsn(8) + end_lsn(8) + timestamp(8)
-            // We don't surface this as its own event; main.cpp uses the
-            // XLogData header's LSN (passed in separately) for checkpointing.
-            return std::nullopt;
+        case 'C': { // Commit
+            // <<< emitted so its LSN (the transaction's real commit boundary,
+            // stamped in by the caller from the XLogData header, same as every
+            // other event) reaches EventDispatcher's confirm tracking; sinks
+            // that don't care about transaction boundaries should skip Op::Commit
+            ChangeEvent ev;
+            ev.op = ChangeEvent::Op::Commit;
+            ev.commit_timestamp = pending_commit_timestamp_unix_us_;
+            return std::vector<ChangeEvent>{std::move(ev)};
+        }
 
         case 'R': // Relation
             handle_relation(p, static_cast<size_t>(end - p));
