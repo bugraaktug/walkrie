@@ -34,6 +34,7 @@ Most CDC-to-vector pipelines today are built from general-purpose tools (Debeziu
 * Root-cause why local Llama batching doesn't reduce latency (dense non-causal attention over the combined ubatch is the working hypothesis — see TECHNICAL.md's Known Limitations) and re-benchmark once profiling confirms the mechanism and on non-VM hardware.
 * Vector index management helpers (HNSW index creation/verification on sink tables).
 * Multi-threaded embedding worker pool (multiple `llama_context` instances sharing one loaded model) to use more available CPU cores concurrently.
+* Snapshot-consistent initial backfill for tables with pre-existing rows, using the point-in-time snapshot for Postgres
 
 ## Target Customers
 
