@@ -13,12 +13,14 @@
 // single query, rather than choosing one or the other.
 //
 // usage:
-//   ./candidate_search <config.toml> <query text...> [--limit N] [--location <city>]
+//   ./candidate_search <config.toml> <query text...> [--limit N] [--location <city>] [--conninfo <libpq conninfo>]
 //
 // examples:
 //   ./candidate_search config_cv_demo.toml "senior backend engineer with postgres and docker experience"
 //
 //   ./candidate_search config_cv_demo.toml "senior backend engineer with postgres and docker experience" --location Berlin --limit 5
+//
+//   ./candidate_search config_cv_demo.toml "senior backend engineer with postgres and docker experience" --conninfo "host=localhost port=5432 dbname=hr_demo user=walkrie_demo password=walkrie"
 
 #include <iostream>
 #include <sstream>
@@ -33,13 +35,14 @@ int main(int argc, char** argv)
 {
     if (argc < 3) {
         std::cerr << "usage: " << argv[0]
-                  << " <config.toml> <query text...> [--limit N] [--location <city>]\n";
+                  << " <config.toml> <query text...> [--limit N] [--location <city>] [--conninfo <libpq conninfo>]\n";
         return 1;
     }
 
     std::string config_path = argv[1];
     int limit = 10;
     std::string location_filter; // empty = no filter, semantic search only
+    std::string conninfo_override; // empty = use hardcoded default below
     std::vector<std::string> query_parts;
 
     for (int i = 2; i < argc; ++i) {
@@ -48,6 +51,8 @@ int main(int argc, char** argv)
             limit = std::stoi(argv[++i]);
         } else if (arg == "--location" && i + 1 < argc) {
             location_filter = argv[++i];
+        } else if (arg == "--conninfo" && i + 1 < argc) {
+            conninfo_override = argv[++i];
         } else {
             query_parts.push_back(arg);
         }
@@ -81,11 +86,12 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    auto vec = provider->embed(query_text);
-    if (vec.empty()) {
+    auto vecs = provider->embed_batch({query_text});
+    if (vecs.size() != 1 || vecs[0].empty()) {
         std::cerr << "error: embedding failed for query text\n";
         return 1;
     }
+    auto& vec = vecs[0];
 
     std::ostringstream vec_str;
     vec_str << "[";
@@ -100,10 +106,11 @@ int main(int argc, char** argv)
     // reading it back out of cfg.sinks, since SinkConfiguration doesn't
     // currently expose a public accessor for raw connection fields (it's
     // only consumed internally by create_sink()). Adjust to match your
-    // real [[sink]] block, or add a small --conninfo flag if you want to
-    // avoid hardcoding entirely.
-    std::string conninfo =
-        "host=localhost port=5432 dbname=hr_demo user=walkrie_demo password=walkrie";
+    // real [[sink]] block, or pass --conninfo to override without editing
+    // the binary.
+    std::string conninfo = conninfo_override.empty()
+        ? "host=localhost port=5432 dbname=hr_demo user=walkrie_demo password=walkrie"
+        : conninfo_override;
 
     PGconn* pg = PQconnectdb(conninfo.c_str());
     if (PQstatus(pg) != CONNECTION_OK) {
@@ -120,7 +127,7 @@ int main(int argc, char** argv)
         // Pure semantic search — no structured filter applied.
         sql =
             "SELECT candidate_id, full_name, years_experience, location, cv_text, "
-            "embedding <-> $1::vector AS distance "
+            "embedding <=> $1::vector AS distance "
             "FROM candidate_search "
             "ORDER BY distance ASC "
             "LIMIT $2";
@@ -133,7 +140,7 @@ int main(int argc, char** argv)
         // filtering compose naturally in ordinary SQL.
         sql =
             "SELECT candidate_id, full_name, years_experience, location, cv_text, "
-            "embedding <-> $1::vector AS distance "
+            "embedding <=> $1::vector AS distance "
             "FROM candidate_search "
             "WHERE location = $2 "
             "ORDER BY distance ASC "

@@ -175,10 +175,10 @@ step, no manual sync trigger.
 
 ## Notes
 
-* `candidate_search.cpp` currently hardcodes its own Postgres connection
-  string rather than reading it from the walkrie config — adjust it to
-  match your actual `[[sink]]` block, or add a `--conninfo` flag if you'd
-  rather not hardcode it at all.
+* `candidate_search.cpp` defaults to a hardcoded Postgres connection
+  string rather than reading it from the walkrie config — pass
+  `--conninfo "host=... port=... dbname=... user=... password=..."` to
+  override it without editing the binary.
 * `--location` currently does an exact string match (`WHERE location = $2`).
   Extending this to other metadata columns (years of experience ranges,
   department, seniority) is a straightforward extension of the same
