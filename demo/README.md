@@ -132,7 +132,7 @@ SQL filter on `location`:
 
 This is the important part to notice: `location` is not a pgvector
 concept at all — it's an ordinary `WHERE location = $2` clause sitting
-right next to the `ORDER BY embedding <-> $1::vector`. Structured filters
+right next to the `ORDER BY embedding <=> $1::vector`. Structured filters
 (location, years of experience, department, anything else mapped as
 `metadata` in your `table_mapping`) and semantic ranking compose in plain
 SQL, in the same query, with no separate search engine or index to keep
