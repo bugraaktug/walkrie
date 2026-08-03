@@ -26,7 +26,7 @@ struct AppSettings
     int         batch_timeout_ms = 50;
 };
 
-struct SourceConfig 
+struct SourceConfig
 {
     std::string host        = "localhost";
     std::string port        = "5432";
@@ -35,6 +35,7 @@ struct SourceConfig
     std::string password;
     std::string slot_name   = "pgcdc_slot";
     std::string publication = "pgcdc_pub";
+    bool        backfill    = false; // <<< scan pre-existing rows on first-ever slot creation; no effect on resume of an existing slot
 };
 
 //   "id"       — primary key used as the upsert key in the sink table
@@ -249,10 +250,16 @@ inline AppConfig load_config(const std::string& path)
         return v ? **v : def;
     };
     auto i32 = [](const toml::table* t, const char* key, int def) -> int {
-        if (!t) 
+        if (!t)
 	        return def;
         auto v = t->get_as<int64_t>(key);
         return v ? static_cast<int>(**v) : def;
+    };
+    auto bl = [](const toml::table* t, const char* key, bool def) -> bool {
+        if (!t)
+	        return def;
+        auto v = t->get_as<bool>(key);
+        return v ? **v : def;
     };
 
     if (auto* a = tbl["app"].as_table()) {
@@ -275,6 +282,7 @@ inline AppConfig load_config(const std::string& path)
             	repl_cfg.password    = str(s, "password",    repl_cfg.password);
             	repl_cfg.slot_name   = str(s, "slot_name",   repl_cfg.slot_name);
             	repl_cfg.publication = str(s, "publication", repl_cfg.publication);
+            	repl_cfg.backfill    = bl(s,  "backfill",    repl_cfg.backfill);
 	        }
 	        cfg.sources.push_back(repl_cfg);
     	}
