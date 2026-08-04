@@ -123,6 +123,40 @@ bool BackfillStore::is_table_dumped(const std::string& source_table) const
     return false; // no row yet == not dumped
 }
 
+std::optional<std::string> BackfillStore::get_row_data(const std::string& source_table, const std::string& row_id) const
+{
+    StmtGuard g;
+    auto* stmt = prepare_or_throw(db_, g,
+        "SELECT row_data FROM backfill_rows WHERE source_table = ? AND row_id = ?",
+        "get_row_data");
+    sqlite3_bind_text(stmt, 1, source_table.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, row_id.c_str(), -1, SQLITE_TRANSIENT);
+
+    int rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW) {
+        return std::string(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0)));
+    }
+    if (rc != SQLITE_DONE) {
+        throw std::runtime_error("BackfillStore: get_row_data failed: " + std::string(sqlite3_errmsg(db_)));
+    }
+    return std::nullopt;
+}
+
+bool BackfillStore::update_row_data(const std::string& source_table, const std::string& row_id, const std::string& row_data_json)
+{
+    StmtGuard g;
+    auto* stmt = prepare_or_throw(db_, g,
+        "UPDATE backfill_rows SET row_data = ? WHERE source_table = ? AND row_id = ?",
+        "update_row_data");
+    sqlite3_bind_text(stmt, 1, row_data_json.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, source_table.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, row_id.c_str(), -1, SQLITE_TRANSIENT);
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        throw std::runtime_error("BackfillStore: update_row_data failed: " + std::string(sqlite3_errmsg(db_)));
+    }
+    return sqlite3_changes(db_) > 0;
+}
+
 std::vector<BackfillStore::ClaimedRow> BackfillStore::claim_pending(size_t limit)
 {
     StmtGuard g;

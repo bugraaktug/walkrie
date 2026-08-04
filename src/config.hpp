@@ -16,7 +16,7 @@
 namespace pgcdc 
 {
 
-struct AppSettings 
+struct AppSettings
 {
     std::string log_level        = "info";
     std::string log_file         = "/var/log/walkrie/walkrie.log";
@@ -24,6 +24,7 @@ struct AppSettings
     int         log_max_files    = 5;
     size_t      batch_size       = 1;
     int         batch_timeout_ms = 50;
+    std::string backfill_dir     = "/var/lib/walkrie/backfill"; // <<< one SQLite file per source, named <slot_name>.sqlite3
 };
 
 struct SourceConfig
@@ -269,6 +270,7 @@ inline AppConfig load_config(const std::string& path)
         cfg.settings.log_max_files      = i32(a, "log_max_files",   cfg.settings.log_max_files);
         cfg.settings.batch_size         = static_cast<size_t>(i32(a, "batch_size", static_cast<int>(cfg.settings.batch_size)));
         cfg.settings.batch_timeout_ms   = i32(a, "batch_timeout_ms", cfg.settings.batch_timeout_ms);
+        cfg.settings.backfill_dir       = str(a, "backfill_dir",    cfg.settings.backfill_dir);
     }
 
     if (auto* arr = tbl["source"].as_array()) {

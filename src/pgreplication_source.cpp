@@ -49,7 +49,13 @@ std::string PgReplicationConfig::to_conninfo() const
 }
 
 PgReplicationSource::PgReplicationSource(SourceId id, PgReplicationConfig config)
-    : ReplicationSource(id), config_(std::move(config)) {}
+    : ReplicationSource(id), config_(std::move(config))
+{
+    if (config_.backfill) {
+        backfill_util_ = std::make_unique<BackfillUtil>(
+            config_.to_conninfo(), config_.backfill_table_mappings, config_.backfill_store_path);
+    }
+}
 
 PgReplicationSource::~PgReplicationSource() 
 {
@@ -116,6 +122,7 @@ bool PgReplicationSource::connect()
 
     if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0) {
         start_lsn_ = PQgetvalue(res, 0, 1); // column 1 = consistent_point
+        slot_freshly_created_ = true;
         spdlog::info("[PgReplicationSource] created replication slot '{}', starting at LSN {}",
                      config_.slot_name.c_str(), start_lsn_.c_str());
         PQclear(res);
@@ -124,9 +131,29 @@ bool PgReplicationSource::connect()
         resume_slot();
     }
 
+    if (backfill_util_) {
+        try {
+            backfill_util_->open();
+        } catch (const std::exception& e) {
+            last_error_ = std::string("backfill store open failed: ") + e.what();
+            return false;
+        }
+    }
+
     last_read_lsn_ = parse_lsn(start_lsn_);
     confirmed_lsn_.store(last_read_lsn_, std::memory_order_relaxed);
     last_status_update_ = std::time(nullptr);
+    return true;
+}
+
+bool PgReplicationSource::run_backfill_dump()
+{
+    if (!backfill_util_ || !slot_freshly_created_) return true; // <<< no effect on resume of an existing slot
+
+    if (!backfill_util_->dump_all()) {
+        last_error_ = backfill_util_->last_error();
+        return false;
+    }
     return true;
 }
 
@@ -250,7 +277,8 @@ void PgReplicationSource::drain_available_messages()
                    if (events) {
                        for (auto& event : *events) {
                            event.commit_lsn = header->wal_start;
-                           handle_(event, id());
+                           bool absorbed = backfill_util_ && backfill_util_->absorb_event(event);
+                           if (!absorbed) handle_(event, id());
                        }
                    }
                 } catch (const std::exception& e) {

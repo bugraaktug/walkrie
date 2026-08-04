@@ -2,17 +2,20 @@
 
 #include <atomic>
 #include <ctime>
+#include <memory>
 #include <string>
+#include <vector>
 
 #include <libpq-fe.h>
 #include <event2/event.h>
 
+#include "backfill_util.hpp"
 #include "pgoutput_parser.hpp"
 #include "replication_source.hpp"
 
 namespace pgcdc {
 
-struct PgReplicationConfig 
+struct PgReplicationConfig
 {
     std::string host = "localhost";
     std::string port = "5432";
@@ -21,6 +24,10 @@ struct PgReplicationConfig
     std::string password;
     std::string slot_name = "pgcdc_slot";
     std::string publication_name = "pgcdc_pub";
+
+    bool                      backfill = false;
+    std::vector<TableMapping> backfill_table_mappings; // <<< ignored unless backfill is true
+    std::string               backfill_store_path;     // <<< ignored unless backfill is true
 
     std::string to_conninfo() const;
 };
@@ -42,6 +49,9 @@ public:
     void set_confirmed_lsn(uint64_t lsn) override;
     void flush_confirmed_lsn() override;
 
+    bool was_slot_freshly_created() const { return slot_freshly_created_; }
+    bool run_backfill_dump(); // <<< no-op (returns true) unless backfill is enabled and the slot was freshly created this run
+
 protected:
     void ping_update();
     void drain_available_messages();
@@ -56,7 +66,9 @@ private:
     std::time_t last_status_update_ = 0;
     PgOutputParser parser_;
     ChangeEventFn handle_;
-    
+    bool slot_freshly_created_ = false;
+    std::unique_ptr<BackfillUtil> backfill_util_; // <<< null unless backfill is enabled in config for this source
+
     event* read_event_ = nullptr;
     event* timer_event_ = nullptr;
 

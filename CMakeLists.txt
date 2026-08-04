@@ -74,6 +74,7 @@ add_library(walkrie_core STATIC
     src/pgembedding_sink.cpp
     src/model/gguf_metadata_reader.cpp
     src/backfill_store.cpp
+    src/backfill_util.cpp
 )
 target_include_directories(walkrie_core PUBLIC
     ${CMAKE_SOURCE_DIR}/include
@@ -112,6 +113,7 @@ add_executable(walkrie_tests
     src/tests/test_xframe_log.cpp
     src/tests/test_parser.cpp
     src/tests/test_backfill_store.cpp
+    src/tests/test_backfill_util.cpp
 )
 target_include_directories(walkrie_tests PRIVATE
     src

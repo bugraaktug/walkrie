@@ -12,6 +12,7 @@ public:
     void load_from_config(const toml::table& t) override;
     std::vector<std::string> validate() const override;
     std::shared_ptr<EventSink> create_sink(const EmbeddingConfig& embedding_cfg) const override;
+    std::vector<TableMapping> mappings() const override { return table_mappings; }
     
     std::string host     = "localhost";
     std::string port     = "5432";

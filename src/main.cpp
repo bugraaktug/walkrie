@@ -177,6 +177,12 @@ int main(int argc, char** argv)
             cfg.settings.batch_size,
             std::chrono::milliseconds(cfg.settings.batch_timeout_ms));
 
+    std::vector<pgcdc::TableMapping> backfill_table_mappings; // <<< union across all sinks' mappings, same scope live dispatch already uses
+    for (const auto& sink_instance : cfg.sinks) {
+        auto tms = sink_instance->mappings();
+        backfill_table_mappings.insert(backfill_table_mappings.end(), tms.begin(), tms.end());
+    }
+
     std::vector<std::unique_ptr<pgcdc::PgReplicationSource>> sources;
     SourceId next_source_id = 1;
     for (const auto& src : cfg.sources) {
@@ -188,6 +194,11 @@ int main(int argc, char** argv)
     	src_config.password         = src.password;
     	src_config.slot_name        = src.slot_name;
     	src_config.publication_name = src.publication;
+    	src_config.backfill         = src.backfill;
+    	if (src.backfill) {
+    	    src_config.backfill_table_mappings = backfill_table_mappings;
+    	    src_config.backfill_store_path     = cfg.settings.backfill_dir + "/" + src.slot_name + ".sqlite3";
+    	}
     	sources.push_back(std::make_unique<pgcdc::PgReplicationSource>(next_source_id++, src_config));
     }
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -24,6 +25,9 @@ public:
                      const std::string& row_data_json); // INSERT OR IGNORE — idempotent re-dump
     void mark_table_dumped(const std::string& source_table);
     bool is_table_dumped(const std::string& source_table) const;
+
+    std::optional<std::string> get_row_data(const std::string& source_table, const std::string& row_id) const; // <<< nullopt if not present
+    bool update_row_data(const std::string& source_table, const std::string& row_id, const std::string& row_data_json); // <<< no-op, returns false if not present
 
     struct ClaimedRow
     {
