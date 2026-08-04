@@ -1,8 +1,14 @@
 #include <doctest.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <filesystem>
+#include <set>
 #include <string>
+#include <thread>
+
+#include <sqlite3.h>
 
 #include "backfill_store.hpp"
 
@@ -160,6 +166,70 @@ TEST_SUITE("BackfillStore")
             REQUIRE(claimed.size() == 1);
             CHECK(claimed[0].row_id == "1");
         }
+    }
+
+    TEST_CASE("claim_pending blocks on a concurrent writer instead of throwing SQLITE_BUSY immediately")
+    {
+        // Regression test for the busy_timeout gap found while designing multi-worker-per-source
+        // backfill: without it, a losing writer failed instantly instead of waiting its turn.
+        auto path = temp_db_path();
+        pgcdc::BackfillStore store(path);
+        store.open();
+        store.insert_row("users", "1", "{}");
+
+        // A second raw connection to the same file holds the write lock via BEGIN IMMEDIATE,
+        // standing in for a second walkrie_worker process mid-write.
+        sqlite3* blocker = nullptr;
+        REQUIRE(sqlite3_open(path.c_str(), &blocker) == SQLITE_OK);
+        REQUIRE(sqlite3_exec(blocker, "BEGIN IMMEDIATE", nullptr, nullptr, nullptr) == SQLITE_OK);
+
+        std::atomic<bool> claim_returned{false};
+        std::vector<pgcdc::BackfillStore::ClaimedRow> claimed;
+        std::thread t([&] {
+            claimed = store.claim_pending(10); // should block here, not throw, until the lock below releases
+            claim_returned = true;
+        });
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        CHECK_FALSE(claim_returned.load()); // still waiting on the blocker's lock
+
+        sqlite3_exec(blocker, "COMMIT", nullptr, nullptr, nullptr);
+        sqlite3_close(blocker);
+
+        t.join();
+        CHECK(claim_returned.load());
+        REQUIRE(claimed.size() == 1);
+        CHECK(claimed[0].row_id == "1");
+    }
+
+    TEST_CASE("concurrent claim_pending from two separate connections never double-claims a row")
+    {
+        auto path = temp_db_path();
+        {
+            pgcdc::BackfillStore seed(path);
+            seed.open();
+            for (int i = 0; i < 20; ++i) seed.insert_row("users", std::to_string(i), "{}");
+        }
+
+        pgcdc::BackfillStore store_a(path);
+        store_a.open();
+        pgcdc::BackfillStore store_b(path);
+        store_b.open();
+
+        std::vector<pgcdc::BackfillStore::ClaimedRow> claimed_a, claimed_b;
+        std::thread ta([&] { claimed_a = store_a.claim_pending(20); });
+        std::thread tb([&] { claimed_b = store_b.claim_pending(20); });
+        ta.join();
+        tb.join();
+
+        CHECK(claimed_a.size() + claimed_b.size() == 20); // every row claimed exactly once, by exactly one side
+
+        std::set<std::string> ids_a, ids_b;
+        for (const auto& r : claimed_a) ids_a.insert(r.row_id);
+        for (const auto& r : claimed_b) ids_b.insert(r.row_id);
+        std::vector<std::string> overlap;
+        std::set_intersection(ids_a.begin(), ids_a.end(), ids_b.begin(), ids_b.end(), std::back_inserter(overlap));
+        CHECK(overlap.empty());
     }
 
 }

@@ -66,22 +66,30 @@ bool BackfillWorker::run()
     }
 
     for (;;) {
-        auto claimed = store.claim_pending(claim_batch_size_);
+        std::vector<BackfillStore::ClaimedRow> claimed;
+        try {
+            claimed = store.claim_pending(claim_batch_size_);
+        } catch (const std::exception& e) {
+            // <<< e.g. SQLITE_BUSY past the busy_timeout under heavy multi-worker contention on one source's store
+            last_error_ = std::string("claim_pending failed: ") + e.what();
+            return false;
+        }
         if (claimed.empty()) break; // <<< dump already ran before this worker was spawned — empty means truly done
 
-        std::vector<ChangeEvent> events;
-        events.reserve(claimed.size());
-        for (const auto& row : claimed) events.push_back(to_change_event(row));
-
         try {
+            std::vector<ChangeEvent> events;
+            events.reserve(claimed.size());
+            for (const auto& row : claimed) events.push_back(to_change_event(row));
+
             for (auto& sink : sinks) sink->call_batch(events);
+
+            for (const auto& row : claimed) store.mark_done(row.source_table, row.row_id);
         } catch (const std::exception& e) {
-            // <<< real exception (not a logged-and-swallowed upsert failure) — leave rows 'claimed' for slice 6's stale-claim reset rather than mark undelivered rows done
-            last_error_ = std::string("sink dispatch failed: ") + e.what();
+            // <<< anything from rehydration, dispatch, or mark_done — leave this batch's rows 'claimed' for slice 6's stale-claim reset rather than mark undelivered rows done
+            last_error_ = std::string("batch processing failed: ") + e.what();
             return false;
         }
 
-        for (const auto& row : claimed) store.mark_done(row.source_table, row.row_id);
         spdlog::info("[BackfillWorker] drained {} row(s)", claimed.size());
     }
 

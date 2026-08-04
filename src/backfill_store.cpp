@@ -59,6 +59,8 @@ void BackfillStore::open()
         throw std::runtime_error("BackfillStore: failed to open '" + db_path_ + "': " + err);
     }
 
+    sqlite3_busy_timeout(db_, 5000); // <<< once multiple workers share one source's store, a losing writer blocks up to 5s instead of throwing SQLITE_BUSY immediately
+
     exec_or_throw(db_,
         "CREATE TABLE IF NOT EXISTS backfill_rows ("
         "  source_table TEXT NOT NULL,"

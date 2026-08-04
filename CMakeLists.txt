@@ -202,6 +202,15 @@ target_include_directories(pg_upsert_bench PRIVATE
 )
 target_link_libraries(pg_upsert_bench PRIVATE walkrie_core)
 
+# --- backfill drain bench (raw embed_batch baseline vs real walkrie_worker end-to-end, --workers N for contention stress) ---
+add_executable(embed_backfill_batched_bench src/bench/embed_backfill_batched_bench.cpp)
+target_include_directories(embed_backfill_batched_bench PRIVATE
+    src
+    src/include
+    src/third_party
+)
+target_link_libraries(embed_backfill_batched_bench PRIVATE walkrie_core)
+
 # --- demo ---
 add_executable(candidate_search demo/candidate_search_tool.cpp)
 target_include_directories(candidate_search PRIVATE src src/include src/third_party)
