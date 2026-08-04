@@ -19,7 +19,7 @@
 // invariant that prevents the replay-on-restart bug.
 //
 // usage:
-//   ./test_lsn_confirm <config.toml> [--slot NAME] [--publication NAME] [--table NAME]
+//   ./test_lsn_confirm <config.toml> [--slot NAME] [--publication NAME] [--table NAME] [--conninfo "<pg conninfo>"]
 //
 // example:
 //   ./test_lsn_confirm ../config_samples/config_sample.toml
@@ -48,6 +48,7 @@ struct Options
     std::string slot = "walkrie_it_lsn_slot";
     std::string publication = "walkrie_it_lsn_pub";
     std::string table = "walkrie_it_lsn_table";
+    std::string conninfo; // <<< optional override for the admin/setup connection; falls back to the config's [[source]] connection
 };
 
 Options parse_args(int argc, char** argv)
@@ -59,6 +60,7 @@ Options parse_args(int argc, char** argv)
         if (arg == "--slot" && i + 1 < argc) opts.slot = argv[++i];
         else if (arg == "--publication" && i + 1 < argc) opts.publication = argv[++i];
         else if (arg == "--table" && i + 1 < argc) opts.table = argv[++i];
+        else if (arg == "--conninfo" && i + 1 < argc) opts.conninfo = argv[++i];
     }
     return opts;
 }
@@ -146,12 +148,16 @@ int main(int argc, char** argv)
     }
     const auto& src_toml = cfg.sources.front();
 
-    std::ostringstream admin_conninfo;
-    admin_conninfo << "host=" << src_toml.host << " port=" << src_toml.port
-                    << " dbname=" << src_toml.dbname << " user=" << src_toml.user;
-    if (!src_toml.password.empty()) admin_conninfo << " password=" << src_toml.password;
+    std::string admin_conninfo = opts.conninfo;
+    if (admin_conninfo.empty()) {
+        std::ostringstream derived;
+        derived << "host=" << src_toml.host << " port=" << src_toml.port
+                << " dbname=" << src_toml.dbname << " user=" << src_toml.user;
+        if (!src_toml.password.empty()) derived << " password=" << src_toml.password;
+        admin_conninfo = derived.str();
+    }
 
-    PGconn* admin = PQconnectdb(admin_conninfo.str().c_str());
+    PGconn* admin = PQconnectdb(admin_conninfo.c_str());
     if (PQstatus(admin) != CONNECTION_OK) {
         std::cerr << "admin connection failed: " << PQerrorMessage(admin) << "\n";
         return 1;

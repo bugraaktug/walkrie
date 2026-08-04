@@ -75,6 +75,7 @@ add_library(walkrie_core STATIC
     src/model/gguf_metadata_reader.cpp
     src/backfill_store.cpp
     src/backfill_util.cpp
+    src/backfill_worker.cpp
 )
 target_include_directories(walkrie_core PUBLIC
     ${CMAKE_SOURCE_DIR}/include
@@ -101,6 +102,10 @@ target_link_libraries(walkrie_core PUBLIC
 add_executable(walkrie src/main.cpp)
 target_link_libraries(walkrie PRIVATE walkrie_core)
 
+# --- backfill drain worker (one process per source with pending backfill work, see slice 5) ---
+add_executable(walkrie_worker src/walkrie_worker_main.cpp)
+target_link_libraries(walkrie_worker PRIVATE walkrie_core)
+
 # --- unit tests ---
 add_executable(walkrie_tests
     src/tests/test_main.cpp
@@ -114,6 +119,7 @@ add_executable(walkrie_tests
     src/tests/test_parser.cpp
     src/tests/test_backfill_store.cpp
     src/tests/test_backfill_util.cpp
+    src/tests/test_backfill_worker.cpp
 )
 target_include_directories(walkrie_tests PRIVATE
     src
@@ -149,6 +155,13 @@ add_executable(test_backfill_dump
 target_include_directories(test_backfill_dump PRIVATE
     src src/include src/third_party)
 target_link_libraries(test_backfill_dump PRIVATE
+    walkrie_core)
+
+add_executable(test_backfill_worker_drain
+    src/tests/integration/test_backfill_worker_drain.cpp)
+target_include_directories(test_backfill_worker_drain PRIVATE
+    src src/include src/third_party)
+target_link_libraries(test_backfill_worker_drain PRIVATE
     walkrie_core)
 
 # --- end to end bench ---
