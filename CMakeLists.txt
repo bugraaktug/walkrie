@@ -28,6 +28,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(PkgConfig REQUIRED)
 find_package(CURL REQUIRED)
+find_package(SQLite3 REQUIRED)
 pkg_check_modules(LIBEVENT REQUIRED libevent)
 
 
@@ -72,6 +73,7 @@ add_library(walkrie_core STATIC
     src/embedding_provider.cpp
     src/pgembedding_sink.cpp
     src/model/gguf_metadata_reader.cpp
+    src/backfill_store.cpp
 )
 target_include_directories(walkrie_core PUBLIC
     ${CMAKE_SOURCE_DIR}/include
@@ -91,6 +93,7 @@ target_link_libraries(walkrie_core PUBLIC
     CURL::libcurl
     llama
     ggml
+    SQLite::SQLite3
 )
 
 # --- main binary ---
@@ -108,6 +111,7 @@ add_executable(walkrie_tests
     src/tests/test_upsert_sql.cpp
     src/tests/test_xframe_log.cpp
     src/tests/test_parser.cpp
+    src/tests/test_backfill_store.cpp
 )
 target_include_directories(walkrie_tests PRIVATE
     src
