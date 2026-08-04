@@ -255,6 +255,12 @@ int main(int argc, char** argv)
             event_base_free(base);
             return 1;
         }
+        if (!source->run_backfill_dump_if_required()) {
+            std::cerr << "Source backfill dump failed: " << source->last_error() << "\n";
+            spdlog::error("Source backfill dump failed - {}", source->last_error());
+            event_base_free(base);
+            return 1;
+        }
         if (!source->start_streaming()) {
             std::cerr << "Source replication streaming failed: " << source->last_error() << "\n";
             spdlog::error("Source replication streaming failed - {}", source->last_error());

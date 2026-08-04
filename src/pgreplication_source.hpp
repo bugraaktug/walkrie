@@ -50,7 +50,7 @@ public:
     void flush_confirmed_lsn() override;
 
     bool was_slot_freshly_created() const { return slot_freshly_created_; }
-    bool run_backfill_dump(); // <<< no-op (returns true) unless backfill is enabled and the slot was freshly created this run
+    bool run_backfill_dump_if_required(); // <<< no-op (returns true) unless backfill is enabled and the slot was freshly created this run
 
 protected:
     void ping_update();

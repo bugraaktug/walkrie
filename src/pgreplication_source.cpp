@@ -146,7 +146,7 @@ bool PgReplicationSource::connect()
     return true;
 }
 
-bool PgReplicationSource::run_backfill_dump()
+bool PgReplicationSource::run_backfill_dump_if_required()
 {
     if (!backfill_util_ || !slot_freshly_created_) return true; // <<< no effect on resume of an existing slot
 

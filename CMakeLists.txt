@@ -144,6 +144,13 @@ target_include_directories(test_lsn_confirm PRIVATE
 target_link_libraries(test_lsn_confirm PRIVATE
     walkrie_core)
 
+add_executable(test_backfill_dump
+    src/tests/integration/test_backfill_dump.cpp)
+target_include_directories(test_backfill_dump PRIVATE
+    src src/include src/third_party)
+target_link_libraries(test_backfill_dump PRIVATE
+    walkrie_core)
+
 # --- end to end bench ---
 add_executable(walkrie_bench
     src/bench/walkrie_bench.cpp
