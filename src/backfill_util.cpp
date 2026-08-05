@@ -34,6 +34,16 @@ void BackfillUtil::reset()
     store_.reset();
 }
 
+void BackfillUtil::reset_stale_claims()
+{
+    store_.reset_stale_claims();
+}
+
+bool BackfillUtil::has_prior_dump_state() const
+{
+    return store_.has_any_dump_state();
+}
+
 const TableMapping* BackfillUtil::find_mapping(const std::string& source_table) const
 {
     for (const auto& tm : table_mappings_) {
@@ -86,7 +96,16 @@ bool BackfillUtil::dump_all()
 
     bool ok = true;
     for (const auto& tm : table_mappings_) { // <<< caller narrows this to the source's own publication via set_table_mappings() before calling
-        if (store_.is_table_dumped(tm.source_table)) continue; // <<< already dumped in a prior (possibly crashed) run
+        if (store_.is_table_dumped(tm.source_table)) {
+            spdlog::trace("[BackfillUtil] '{}' already dumped, skipping", tm.source_table);
+            continue; // <<< already dumped in a prior (possibly crashed) run
+        }
+
+        int staged = store_.count_rows_for_table(tm.source_table);
+        if (staged > 0) {
+            spdlog::info("[BackfillUtil] resuming interrupted dump for '{}' — {} row(s) already staged from a prior attempt", tm.source_table, staged);
+        }
+        store_.mark_table_dump_started(tm.source_table); // <<< marker exists even if we crash before finishing this table's SELECT
 
         std::vector<std::string> select_cols = {tm.id_source_, tm.embed_source_};
         for (const auto& cm : tm.columns) {
@@ -131,7 +150,7 @@ bool BackfillUtil::dump_all()
         }
         PQclear(res);
 
-        store_.mark_table_dumped(tm.source_table);
+        store_.mark_table_dumped(tm.source_table, nrows);
         spdlog::info("[BackfillUtil] dumped {} row(s) for '{}'", nrows, tm.source_table);
     }
 
@@ -149,12 +168,15 @@ bool BackfillUtil::absorb_event(const ChangeEvent& event)
     if (event.op != ChangeEvent::Op::Update && event.op != ChangeEvent::Op::Delete) return false; // <<< Insert can't match a dumped row — dump only captures pre-existing rows
 
     const TableMapping* tm = find_mapping(event.table_name);
-    if (!tm) return false;
+    if (!tm) return false; // <<< not a backfill-mapped table — no trace, would fire on every unrelated live event
 
     if (event.op == ChangeEvent::Op::Delete) {
         if (event.old_row) {
             std::string row_id = get_column(*event.old_row, tm->id_source_); // <<< id is always present under REPLICA IDENTITY DEFAULT
-            if (!row_id.empty()) store_.mark_done(tm->source_table, row_id);
+            if (!row_id.empty()) {
+                spdlog::trace("[BackfillUtil] Delete for '{}' id={} — removing from store if present", tm->source_table, row_id);
+                store_.mark_done(tm->source_table, row_id);
+            }
         }
         return false; // <<< remove() is a safe no-op on a row never upserted — always let Delete reach sinks too
     }
@@ -164,11 +186,15 @@ bool BackfillUtil::absorb_event(const ChangeEvent& event)
     if (row_id.empty()) return false;
 
     auto existing = store_.get_row_data(tm->source_table, row_id);
-    if (!existing) return false; // <<< not a backfill row (or already drained) — dispatch normally
+    if (!existing) {
+        spdlog::trace("[BackfillUtil] Update for '{}' id={} — not in store, dispatching normally", tm->source_table, row_id);
+        return false; // <<< not a backfill row (or already drained) — dispatch normally
+    }
 
     ordered_json merged = ordered_json::parse(*existing);
     merge_known_columns(merged, *event.new_row, *tm);
     store_.update_row_data(tm->source_table, row_id, merged.dump());
+    spdlog::trace("[BackfillUtil] Update for '{}' id={} — merged into pending row, suppressing dispatch", tm->source_table, row_id);
     return true; // <<< backfill now owns writing this row; suppress live dispatch
 }
 

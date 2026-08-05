@@ -126,6 +126,8 @@ std::vector<TableMapping> PgReplicationSource::filter_to_source_publication(cons
     for (const auto& tm : mappings) {
         if (published_tables.count(tm.source_table)) {
             filtered.push_back(tm);
+            spdlog::trace("[PgReplicationSource] [{}] '{}' is in publication '{}' — included in backfill scope",
+                         config_.slot_name, tm.source_table, config_.publication_name);
         } else {
             // <<< table_mappings are global to the sink, not scoped per source — exclude ones this source's publication doesn't own
             spdlog::info("[PgReplicationSource] [{}] '{}' is not a member of publication '{}' — excluding from backfill scope",
@@ -165,7 +167,11 @@ bool PgReplicationSource::connect()
         try {
             backfill_util_->open();
             backfill_util_->set_table_mappings(filter_to_source_publication(config_.backfill_table_mappings));
-            if (slot_freshly_created_) backfill_util_->reset(); // <<< fresh slot = new epoch, discard any stale state from a prior slot by this name
+            if (slot_freshly_created_) {
+                backfill_util_->reset(); // <<< fresh slot = new epoch, discard any stale state from a prior slot by this name
+            } else {
+                backfill_util_->reset_stale_claims(); // <<< a worker from the previous process (if any) can't still be alive after a restart
+            }
         } catch (const std::exception& e) {
             last_error_ = std::string("backfill store open failed: ") + e.what();
             return false;
@@ -180,8 +186,14 @@ bool PgReplicationSource::connect()
 
 bool PgReplicationSource::run_backfill_dump_if_required()
 {
-    if (!backfill_util_ || !slot_freshly_created_) return true; // <<< no effect on resume of an existing slot
+    if (!backfill_util_) return true;
+    // <<< skip only when backfill was never active for this slot (just flipped on for an existing slot) — resume finishes an interrupted dump
+    if (!slot_freshly_created_ && !backfill_util_->has_prior_dump_state()) {
+        spdlog::trace("[PgReplicationSource] [{}] backfill never active for this slot — skipping dump", config_.slot_name);
+        return true;
+    }
 
+    spdlog::info("[PgReplicationSource] [{}] running backfill dump (fresh_slot={})", config_.slot_name, slot_freshly_created_);
     if (!backfill_util_->dump_all()) {
         last_error_ = backfill_util_->last_error();
         return false;

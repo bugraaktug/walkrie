@@ -129,10 +129,21 @@ TEST_SUITE("BackfillStore")
 
         CHECK_FALSE(store.is_table_dumped("users"));
 
-        store.mark_table_dumped("users");
+        store.mark_table_dumped("users", 0);
 
         CHECK(store.is_table_dumped("users"));
         CHECK_FALSE(store.is_table_dumped("orders")); // unrelated table unaffected
+    }
+
+    TEST_CASE("is_table_dumped is false while only mark_table_dump_started has been called")
+    {
+        pgcdc::BackfillStore store(temp_db_path());
+        store.open();
+
+        store.mark_table_dump_started("users");
+
+        CHECK_FALSE(store.is_table_dumped("users")); // in_progress, not complete
+        CHECK(store.has_any_dump_state()); // but a marker does exist — this is the crash-resume signal
     }
 
     TEST_CASE("mark_table_dumped is idempotent")
@@ -140,23 +151,67 @@ TEST_SUITE("BackfillStore")
         pgcdc::BackfillStore store(temp_db_path());
         store.open();
 
-        store.mark_table_dumped("users");
-        store.mark_table_dumped("users");
+        store.mark_table_dumped("users", 5);
+        store.mark_table_dumped("users", 5);
 
         CHECK(store.is_table_dumped("users"));
     }
 
-    TEST_CASE("reset clears rows and dump_complete markers")
+    TEST_CASE("has_any_dump_state is false until a table dump starts or completes")
+    {
+        pgcdc::BackfillStore store(temp_db_path());
+        store.open();
+
+        CHECK_FALSE(store.has_any_dump_state());
+
+        store.mark_table_dumped("users", 0);
+
+        CHECK(store.has_any_dump_state());
+    }
+
+    TEST_CASE("count_rows_for_table reflects live backfill_rows, independent of dumped_row_count")
+    {
+        pgcdc::BackfillStore store(temp_db_path());
+        store.open();
+
+        CHECK(store.count_rows_for_table("users") == 0);
+
+        store.insert_row("users", "1", "{}");
+        store.insert_row("users", "2", "{}");
+        CHECK(store.count_rows_for_table("users") == 2);
+
+        auto claimed = store.claim_pending(10);
+        store.mark_done(claimed[0].source_table, claimed[0].row_id);
+        CHECK(store.count_rows_for_table("users") == 1); // one drained since staging
+    }
+
+    TEST_CASE("reset_stale_claims resets only claimed rows back to pending")
     {
         pgcdc::BackfillStore store(temp_db_path());
         store.open();
 
         store.insert_row("users", "1", "{}");
-        store.mark_table_dumped("users");
+        store.insert_row("users", "2", "{}");
+        store.claim_pending(1); // claims row "1" only
+
+        store.reset_stale_claims();
+
+        auto claimed = store.claim_pending(10);
+        REQUIRE(claimed.size() == 2); // both rows claimable again — "1" was reset, "2" was already pending
+    }
+
+    TEST_CASE("reset clears rows and table markers")
+    {
+        pgcdc::BackfillStore store(temp_db_path());
+        store.open();
+
+        store.insert_row("users", "1", "{}");
+        store.mark_table_dumped("users", 1);
 
         store.reset();
 
         CHECK_FALSE(store.is_table_dumped("users"));
+        CHECK_FALSE(store.has_any_dump_state());
         auto claimed = store.claim_pending(10);
         CHECK(claimed.empty());
     }
@@ -169,7 +224,7 @@ TEST_SUITE("BackfillStore")
             pgcdc::BackfillStore store(path);
             store.open();
             store.insert_row("users", "1", R"({"id":"1"})");
-            store.mark_table_dumped("users");
+            store.mark_table_dumped("users", 1);
         }
 
         {

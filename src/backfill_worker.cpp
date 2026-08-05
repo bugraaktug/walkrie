@@ -74,13 +74,17 @@ bool BackfillWorker::run()
             last_error_ = std::string("claim_pending failed: ") + e.what();
             return false;
         }
-        if (claimed.empty()) break; // <<< dump already ran before this worker was spawned — empty means truly done
+        if (claimed.empty()) {
+            spdlog::trace("[BackfillWorker] claim_pending returned empty — drain complete");
+            break; // <<< dump already ran before this worker was spawned — empty means truly done
+        }
 
         try {
             std::vector<ChangeEvent> events;
             events.reserve(claimed.size());
             for (const auto& row : claimed) events.push_back(to_change_event(row));
 
+            spdlog::trace("[BackfillWorker] dispatching {} row(s) to {} sink(s)", events.size(), sinks.size());
             for (auto& sink : sinks) sink->call_batch(events);
 
             for (const auto& row : claimed) store.mark_done(row.source_table, row.row_id);

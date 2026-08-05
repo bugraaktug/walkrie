@@ -127,7 +127,7 @@ int main(int argc, char** argv)
         store.open();
         store.insert_row(source_table, "wkr-1", R"({"id":"wkr-1","name":"alpha body"})");
         store.insert_row(source_table, "wkr-2", R"({"id":"wkr-2","name":"beta body"})");
-        store.mark_table_dumped(source_table);
+        store.mark_table_dumped(source_table, 2);
     }
 
     bool ok = true;

@@ -205,6 +205,8 @@ void log_backfill_spawn_status(BackfillSpawnStatus status, const pgcdc::PgReplic
 {
     switch (status) {
         case BackfillSpawnStatus::NoPendingWork:
+            spdlog::trace("[BackfillSpawn] no pending backfill work for source '{}' — not spawning a worker", source.slot_name());
+            break;
         case BackfillSpawnStatus::Spawned:
             break;
         case BackfillSpawnStatus::WorkerBinaryMissing:

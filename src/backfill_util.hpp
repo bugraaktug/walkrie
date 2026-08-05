@@ -19,6 +19,8 @@ public:
     void open();
     void set_table_mappings(std::vector<TableMapping> table_mappings); // <<< replaces the mapping scope, e.g. after the caller narrows it to this source's own publication
     void reset();
+    void reset_stale_claims(); // <<< call on every resumed connect() — see BackfillStore::reset_stale_claims()
+    bool has_prior_dump_state() const; // <<< true if dump_all() was ever invoked before for this store — lets a resumed slot finish an interrupted dump without re-scanning a slot that just had backfill flipped on
     bool dump_all();
 
     bool absorb_event(const ChangeEvent& event); // <<< Delete removes the row and always returns false (still forwarded to sinks); 

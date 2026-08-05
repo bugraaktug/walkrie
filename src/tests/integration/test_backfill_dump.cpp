@@ -24,6 +24,7 @@
 
 #include <event2/event.h>
 #include <libpq-fe.h>
+#include <sqlite3.h>
 
 #include "backfill_store.hpp"
 #include "config.hpp"
@@ -335,12 +336,72 @@ int main(int argc, char** argv)
         inspect.open();
         auto row4 = inspect.get_row_data(opts.table, "4");
         if (!row4 || row4->find("delta body") == std::string::npos) {
-            std::cout << "FAIL: manual slot drop+recreate did not re-dump — stale dump_complete "
-                       << "marker from the prior epoch blocked it\n";
+            std::cout << "FAIL: manual slot drop+recreate did not re-dump — stale table marker "
+                       << "from the prior epoch blocked it\n";
             ok = false;
         }
     }
     source3.reset();
+
+    // --- Phase E: a dump interrupted mid-table (main-process crash) must be finished on the
+    // next resume, not silently skipped — slice 6 crash-resume ---
+    {
+        sqlite3* raw = nullptr;
+        if (sqlite3_open(store_path.string().c_str(), &raw) != SQLITE_OK) {
+            std::cerr << "phase E: failed to open store for raw manipulation\n";
+            return 1;
+        }
+        // Simulates a crash between mark_table_dump_started() and mark_table_dumped() for a
+        // table dump_all() had already fully completed in phase D.
+        std::string sql = "UPDATE backfill_tables SET status = 'in_progress' WHERE source_table = '" + opts.table + "'";
+        sqlite3_exec(raw, sql.c_str(), nullptr, nullptr, nullptr);
+        sqlite3_close(raw);
+    }
+
+    auto source4 = std::make_unique<pgcdc::PgReplicationSource>(/*id=*/4, src_cfg);
+    if (!source4->connect()) {
+        std::cerr << "source4 connect failed: " << source4->last_error() << "\n";
+        return 1;
+    }
+    if (source4->was_slot_freshly_created()) {
+        std::cout << "FAIL: expected the slot to already exist (resume) for phase E\n";
+        ok = false;
+    }
+    if (!source4->run_backfill_dump_if_required()) {
+        std::cerr << "run_backfill_dump_if_required (resume, interrupted dump) failed: " << source4->last_error() << "\n";
+        return 1;
+    }
+    {
+        pgcdc::BackfillStore inspect(store_path.string());
+        inspect.open();
+        if (!inspect.is_table_dumped(opts.table)) {
+            std::cout << "FAIL: resumed slot did not finish an interrupted dump — table still not marked complete\n";
+            ok = false;
+        }
+    }
+    source4.reset();
+
+    // --- Phase F: stale claims from a crashed worker are reset to pending on the next resume ---
+    {
+        pgcdc::BackfillStore store(store_path.string());
+        store.open();
+        auto claimed = store.claim_pending(10); // simulates a worker that claimed rows then crashed
+        if (claimed.empty()) {
+            std::cout << "FAIL: phase F setup expected rows available to claim\n";
+            ok = false;
+        }
+    }
+
+    auto source5 = std::make_unique<pgcdc::PgReplicationSource>(/*id=*/5, src_cfg);
+    if (!source5->connect()) {
+        std::cerr << "source5 connect failed: " << source5->last_error() << "\n";
+        return 1;
+    }
+    if (!source5->has_pending_backfill_work()) {
+        std::cout << "FAIL: stale claimed rows were not reset to pending on resume\n";
+        ok = false;
+    }
+    source5.reset();
 
     // Cleanup.
     exec_ignore_errors(admin, "SELECT pg_drop_replication_slot('" + opts.slot + "')");

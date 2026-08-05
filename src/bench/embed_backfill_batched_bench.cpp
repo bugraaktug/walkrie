@@ -125,7 +125,7 @@ int main(int argc, char** argv)
                                     tm.embed_source_ + "\":\"" + json_escape(sample_text(i)) + "\"}";
             store.insert_row(tm.source_table, id, row_json);
         }
-        store.mark_table_dumped(tm.source_table);
+        store.mark_table_dumped(tm.source_table, opts.rows);
     }
 
     auto worker_path = std::filesystem::path(argv[0]).parent_path() / "walkrie_worker";
