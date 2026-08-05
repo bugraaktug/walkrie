@@ -26,6 +26,8 @@ public:
     void mark_table_dumped(const std::string& source_table);
     bool is_table_dumped(const std::string& source_table) const;
 
+    bool has_pending() const; // <<< true if any row is still 'pending' — used to decide whether to spawn a drain worker at all
+
     std::optional<std::string> get_row_data(const std::string& source_table, const std::string& row_id) const; // <<< nullopt if not present
     bool update_row_data(const std::string& source_table, const std::string& row_id, const std::string& row_data_json); // <<< no-op, returns false if not present
 

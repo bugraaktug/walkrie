@@ -232,4 +232,23 @@ TEST_SUITE("BackfillStore")
         CHECK(overlap.empty());
     }
 
+    TEST_CASE("has_pending reflects row status, not just row existence")
+    {
+        auto path = temp_db_path();
+        pgcdc::BackfillStore store(path);
+        store.open();
+
+        CHECK_FALSE(store.has_pending()); // empty store
+
+        store.insert_row("users", "1", "{}");
+        CHECK(store.has_pending());
+
+        auto claimed = store.claim_pending(10);
+        REQUIRE(claimed.size() == 1);
+        CHECK_FALSE(store.has_pending()); // claimed, not pending
+
+        store.mark_done(claimed[0].source_table, claimed[0].row_id);
+        CHECK_FALSE(store.has_pending()); // gone entirely
+    }
+
 }

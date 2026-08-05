@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <sstream>
+#include <unordered_set>
 
 #include <libpq-fe.h>
 #include <spdlog/spdlog.h>
@@ -9,10 +10,11 @@
 namespace pgcdc
 {
 
-BackfillUtil::BackfillUtil(std::string conninfo, std::vector<TableMapping> table_mappings, std::string store_path)
+BackfillUtil::BackfillUtil(std::string conninfo, std::vector<TableMapping> table_mappings, std::string store_path, std::string publication_name)
     : conninfo_(std::move(conninfo))
     , table_mappings_(std::move(table_mappings))
     , store_path_(std::move(store_path))
+    , publication_name_(std::move(publication_name))
     , store_(store_path_) {}
 
 void BackfillUtil::open()
@@ -74,8 +76,29 @@ bool BackfillUtil::dump_all()
         return false;
     }
 
+    std::unordered_set<std::string> published_tables;
+    {
+        std::string sql = "SELECT tablename FROM pg_publication_tables WHERE pubname = '" + publication_name_ + "'";
+        PGresult* res = PQexec(conn, sql.c_str());
+        if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+            last_error_ = "failed to read publication membership for '" + publication_name_ + "': " + PQerrorMessage(conn);
+            PQclear(res);
+            PQfinish(conn);
+            return false;
+        }
+        for (int r = 0; r < PQntuples(res); ++r) {
+            published_tables.insert(PQgetvalue(res, r, 0));
+        }
+        PQclear(res);
+    }
+
     bool ok = true;
     for (const auto& tm : table_mappings_) {
+        if (!published_tables.count(tm.source_table)) {
+            // <<< table_mappings are global to the sink, not scoped per source — skip ones this source's publication doesn't own
+            spdlog::info("[BackfillUtil] skipping '{}' — not a member of publication '{}' for this source", tm.source_table, publication_name_);
+            continue;
+        }
         if (store_.is_table_dumped(tm.source_table)) continue; // <<< already dumped in a prior (possibly crashed) run
 
         std::vector<std::string> select_cols = {tm.id_source_, tm.embed_source_};
@@ -127,6 +150,11 @@ bool BackfillUtil::dump_all()
 
     PQfinish(conn);
     return ok;
+}
+
+bool BackfillUtil::has_pending_work() const
+{
+    return store_.has_pending();
 }
 
 bool BackfillUtil::absorb_event(const ChangeEvent& event)

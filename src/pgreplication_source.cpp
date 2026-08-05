@@ -53,7 +53,7 @@ PgReplicationSource::PgReplicationSource(SourceId id, PgReplicationConfig config
 {
     if (config_.backfill) {
         backfill_util_ = std::make_unique<BackfillUtil>(
-            config_.to_conninfo(), config_.backfill_table_mappings, config_.backfill_store_path);
+            config_.to_conninfo(), config_.backfill_table_mappings, config_.backfill_store_path, config_.publication_name);
     }
 }
 
@@ -155,6 +155,18 @@ bool PgReplicationSource::run_backfill_dump_if_required()
         return false;
     }
     return true;
+}
+
+bool PgReplicationSource::has_pending_backfill_work() const
+{
+    if (!backfill_util_) return false;
+    try {
+        return backfill_util_->has_pending_work();
+    } catch (const std::exception& e) {
+        spdlog::error("[PgReplicationSource] [{}] has_pending_backfill_work() check failed: {}",
+                     config_.slot_name.c_str(), e.what());
+        return false;
+    }
 }
 
 void PgReplicationSource::set_confirmed_lsn(uint64_t lsn)

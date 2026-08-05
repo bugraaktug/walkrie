@@ -8,6 +8,7 @@ log_max_size_mb  = 10
 log_max_files    = 5
 batch_size       = 10
 batch_timeout_ms = 50
+backfill_dir     = "/tmp/walkrie_backfill"
 
 [[source]]
 host        = "localhost"
@@ -26,6 +27,17 @@ user        = "quser"
 password    = "quser1234"
 slot_name   = "pgcdc_slot"
 publication = "pgcdc_pub"
+
+[[source]]
+host        = "localhost"
+port        = "5432"
+dbname      = "qdb"
+user        = "quser"
+password    = "quser1234"
+slot_name   = "cdc_backfill_slot"
+publication = "backfill_pub"
+backfill    =  true
+
 
 [[sink]]
 type 	    = "json-output"
@@ -71,10 +83,24 @@ embed_column 	= "embedding"
     sink_column   = "item_name"
     role          = "embed"
 
+ [[sink.table_mapping]]
+ source_table = "test_backfill"
+ discriminator_column = "category"
+ discriminator_label  = "backfill"
+ 
+    [[sink.table_mapping.columns]]
+    source_column = "id"
+    sink_column   = "item_id"
+    role          = "id"
 
+    [[sink.table_mapping.columns]]
+    source_column = "body"
+    sink_column   = "item_name"
+    role          = "embed"
+
+ 
 [embedding]
 provider   = "llama"
-#model_path = "/home/debian/models/bge-m3/bge-m3-Q4_K_M.gguf"
 model_path = "/home/debian/models/bge-m3/bge-m3-Q8_0.gguf"
 api_key    = ""
 dimensions = 1024

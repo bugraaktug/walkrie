@@ -51,6 +51,9 @@ public:
 
     bool was_slot_freshly_created() const { return slot_freshly_created_; }
     bool run_backfill_dump_if_required(); // <<< no-op (returns true) unless backfill is enabled and the slot was freshly created this run
+    bool has_pending_backfill_work() const; // <<< false if backfill is disabled for this source; caller uses this to decide whether to spawn a drain worker
+    const std::string& slot_name() const { return config_.slot_name; }
+    const std::string& backfill_store_path() const { return config_.backfill_store_path; }
 
 protected:
     void ping_update();

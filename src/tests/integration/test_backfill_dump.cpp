@@ -147,6 +147,14 @@ int main(int argc, char** argv)
     exec_or_die(admin, "CREATE PUBLICATION " + opts.publication + " FOR TABLE " + opts.table);
     exec_ignore_errors(admin, "SELECT pg_drop_replication_slot('" + opts.slot + "')");
 
+    // A table_mapping the sink config declares but this source's publication
+    // does not own — table_mappings are global to the sink, not scoped per
+    // source (WLK-0001 dump-scope fix): dump_all() must skip it, not error.
+    const std::string unpublished_table = opts.table + "_unpublished";
+    exec_or_die(admin, "DROP TABLE IF EXISTS " + unpublished_table);
+    exec_or_die(admin, "CREATE TABLE " + unpublished_table + " (id int primary key, body text, category text)");
+    exec_or_die(admin, "INSERT INTO " + unpublished_table + " (id, body, category) VALUES (1, 'unpublished body', 'cat-z')");
+
     // Rows inserted BEFORE the slot exists — these are the "pre-existing
     // rows" the backfill is supposed to catch.
     exec_or_die(admin, "INSERT INTO " + opts.table + " (id, body, category) VALUES "
@@ -164,7 +172,7 @@ int main(int argc, char** argv)
     src_cfg.slot_name        = opts.slot;
     src_cfg.publication_name = opts.publication;
     src_cfg.backfill                   = true;
-    src_cfg.backfill_table_mappings    = {make_mapping(opts.table)};
+    src_cfg.backfill_table_mappings    = {make_mapping(opts.table), make_mapping(unpublished_table)};
     src_cfg.backfill_store_path        = store_path.string();
 
     bool ok = true;
@@ -203,6 +211,16 @@ int main(int argc, char** argv)
         if (!row2 || row2->find("beta body") == std::string::npos || row2->find("cat-b") == std::string::npos) {
             std::cout << "FAIL: row id=2 missing or wrong content in backfill store: "
                        << (row2 ? *row2 : "<absent>") << "\n";
+            ok = false;
+        }
+
+        // The unpublished table's mapping must be skipped entirely, not dumped or errored.
+        if (inspect.is_table_dumped(unpublished_table)) {
+            std::cout << "FAIL: unpublished table was marked dump_complete — should have been skipped\n";
+            ok = false;
+        }
+        if (inspect.get_row_data(unpublished_table, "1").has_value()) {
+            std::cout << "FAIL: unpublished table's row was dumped into the backfill store\n";
             ok = false;
         }
     }
@@ -297,6 +315,7 @@ int main(int argc, char** argv)
     exec_ignore_errors(admin, "SELECT pg_drop_replication_slot('" + opts.slot + "')");
     exec_ignore_errors(admin, "DROP PUBLICATION IF EXISTS " + opts.publication);
     exec_ignore_errors(admin, "DROP TABLE IF EXISTS " + opts.table);
+    exec_ignore_errors(admin, "DROP TABLE IF EXISTS " + unpublished_table);
     PQfinish(admin);
     std::filesystem::remove(store_path);
 

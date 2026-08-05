@@ -125,6 +125,20 @@ bool BackfillStore::is_table_dumped(const std::string& source_table) const
     return false; // no row yet == not dumped
 }
 
+bool BackfillStore::has_pending() const
+{
+    StmtGuard g;
+    auto* stmt = prepare_or_throw(db_, g,
+        "SELECT EXISTS(SELECT 1 FROM backfill_rows WHERE status = 'pending')",
+        "has_pending");
+
+    int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_ROW) {
+        throw std::runtime_error("BackfillStore: has_pending failed: " + std::string(sqlite3_errmsg(db_)));
+    }
+    return sqlite3_column_int(stmt, 0) != 0;
+}
+
 std::optional<std::string> BackfillStore::get_row_data(const std::string& source_table, const std::string& row_id) const
 {
     StmtGuard g;
