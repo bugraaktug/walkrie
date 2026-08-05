@@ -16,7 +16,7 @@
 namespace pgcdc 
 {
 
-struct AppSettings 
+struct AppSettings
 {
     std::string log_level        = "info";
     std::string log_file         = "/var/log/walkrie/walkrie.log";
@@ -24,9 +24,10 @@ struct AppSettings
     int         log_max_files    = 5;
     size_t      batch_size       = 1;
     int         batch_timeout_ms = 50;
+    std::string backfill_dir     = "/var/lib/walkrie/backfill"; // <<< one SQLite file per source, named <slot_name>.sqlite3
 };
 
-struct SourceConfig 
+struct SourceConfig
 {
     std::string host        = "localhost";
     std::string port        = "5432";
@@ -35,6 +36,7 @@ struct SourceConfig
     std::string password;
     std::string slot_name   = "pgcdc_slot";
     std::string publication = "pgcdc_pub";
+    bool        backfill    = false; // <<< scan pre-existing rows on first-ever slot creation; no effect on resume of an existing slot
 };
 
 //   "id"       — primary key used as the upsert key in the sink table
@@ -249,10 +251,16 @@ inline AppConfig load_config(const std::string& path)
         return v ? **v : def;
     };
     auto i32 = [](const toml::table* t, const char* key, int def) -> int {
-        if (!t) 
+        if (!t)
 	        return def;
         auto v = t->get_as<int64_t>(key);
         return v ? static_cast<int>(**v) : def;
+    };
+    auto bl = [](const toml::table* t, const char* key, bool def) -> bool {
+        if (!t)
+	        return def;
+        auto v = t->get_as<bool>(key);
+        return v ? **v : def;
     };
 
     if (auto* a = tbl["app"].as_table()) {
@@ -262,6 +270,7 @@ inline AppConfig load_config(const std::string& path)
         cfg.settings.log_max_files      = i32(a, "log_max_files",   cfg.settings.log_max_files);
         cfg.settings.batch_size         = static_cast<size_t>(i32(a, "batch_size", static_cast<int>(cfg.settings.batch_size)));
         cfg.settings.batch_timeout_ms   = i32(a, "batch_timeout_ms", cfg.settings.batch_timeout_ms);
+        cfg.settings.backfill_dir       = str(a, "backfill_dir",    cfg.settings.backfill_dir);
     }
 
     if (auto* arr = tbl["source"].as_array()) {
@@ -275,6 +284,7 @@ inline AppConfig load_config(const std::string& path)
             	repl_cfg.password    = str(s, "password",    repl_cfg.password);
             	repl_cfg.slot_name   = str(s, "slot_name",   repl_cfg.slot_name);
             	repl_cfg.publication = str(s, "publication", repl_cfg.publication);
+            	repl_cfg.backfill    = bl(s,  "backfill",    repl_cfg.backfill);
 	        }
 	        cfg.sources.push_back(repl_cfg);
     	}

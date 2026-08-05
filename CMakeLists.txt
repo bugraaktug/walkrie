@@ -28,6 +28,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(PkgConfig REQUIRED)
 find_package(CURL REQUIRED)
+find_package(SQLite3 REQUIRED)
 pkg_check_modules(LIBEVENT REQUIRED libevent)
 
 
@@ -72,6 +73,9 @@ add_library(walkrie_core STATIC
     src/embedding_provider.cpp
     src/pgembedding_sink.cpp
     src/model/gguf_metadata_reader.cpp
+    src/backfill_store.cpp
+    src/backfill_util.cpp
+    src/backfill_worker.cpp
 )
 target_include_directories(walkrie_core PUBLIC
     ${CMAKE_SOURCE_DIR}/include
@@ -91,11 +95,16 @@ target_link_libraries(walkrie_core PUBLIC
     CURL::libcurl
     llama
     ggml
+    SQLite::SQLite3
 )
 
 # --- main binary ---
 add_executable(walkrie src/main.cpp)
 target_link_libraries(walkrie PRIVATE walkrie_core)
+
+# --- backfill drain worker (one process per source with pending backfill work, see slice 5) ---
+add_executable(walkrie_worker src/walkrie_worker_main.cpp)
+target_link_libraries(walkrie_worker PRIVATE walkrie_core)
 
 # --- unit tests ---
 add_executable(walkrie_tests
@@ -108,6 +117,9 @@ add_executable(walkrie_tests
     src/tests/test_upsert_sql.cpp
     src/tests/test_xframe_log.cpp
     src/tests/test_parser.cpp
+    src/tests/test_backfill_store.cpp
+    src/tests/test_backfill_util.cpp
+    src/tests/test_backfill_worker.cpp
 )
 target_include_directories(walkrie_tests PRIVATE
     src
@@ -136,6 +148,20 @@ add_executable(test_lsn_confirm
 target_include_directories(test_lsn_confirm PRIVATE
     src src/include src/third_party)
 target_link_libraries(test_lsn_confirm PRIVATE
+    walkrie_core)
+
+add_executable(test_backfill_dump
+    src/tests/integration/test_backfill_dump.cpp)
+target_include_directories(test_backfill_dump PRIVATE
+    src src/include src/third_party)
+target_link_libraries(test_backfill_dump PRIVATE
+    walkrie_core)
+
+add_executable(test_backfill_worker_drain
+    src/tests/integration/test_backfill_worker_drain.cpp)
+target_include_directories(test_backfill_worker_drain PRIVATE
+    src src/include src/third_party)
+target_link_libraries(test_backfill_worker_drain PRIVATE
     walkrie_core)
 
 # --- end to end bench ---
@@ -175,6 +201,15 @@ target_include_directories(pg_upsert_bench PRIVATE
     src/third_party
 )
 target_link_libraries(pg_upsert_bench PRIVATE walkrie_core)
+
+# --- backfill drain bench (raw embed_batch baseline vs real walkrie_worker end-to-end, --workers N for contention stress) ---
+add_executable(embed_backfill_batched_bench src/bench/embed_backfill_batched_bench.cpp)
+target_include_directories(embed_backfill_batched_bench PRIVATE
+    src
+    src/include
+    src/third_party
+)
+target_link_libraries(embed_backfill_batched_bench PRIVATE walkrie_core)
 
 # --- demo ---
 add_executable(candidate_search demo/candidate_search_tool.cpp)

@@ -314,3 +314,58 @@ TEST_SUITE("validate_configuration")
         CHECK(errors_contain(errors, "a valid sink type is required"));
     }
 }
+
+namespace
+{
+
+pgcdc::AppConfig load_config_from_toml(const std::string& contents)
+{
+    std::filesystem::path path = std::filesystem::temp_directory_path() / "walkrie_test_config.toml";
+    {
+        std::ofstream f(path);
+        f << contents;
+    }
+    auto cfg = pgcdc::load_config(path.string());
+    std::filesystem::remove(path);
+    return cfg;
+}
+
+} // namespace
+
+TEST_SUITE("load_config parsing")
+{
+    TEST_CASE("[[source]] backfill defaults to false when omitted")
+    {
+        auto cfg = load_config_from_toml(R"(
+            [[source]]
+            dbname = "testdb"
+            user   = "testuser"
+        )");
+        REQUIRE(cfg.sources.size() == 1);
+        CHECK(cfg.sources[0].backfill == false);
+    }
+
+    TEST_CASE("[[source]] backfill parses true")
+    {
+        auto cfg = load_config_from_toml(R"(
+            [[source]]
+            dbname   = "testdb"
+            user     = "testuser"
+            backfill = true
+        )");
+        REQUIRE(cfg.sources.size() == 1);
+        CHECK(cfg.sources[0].backfill == true);
+    }
+
+    TEST_CASE("[[source]] backfill parses explicit false")
+    {
+        auto cfg = load_config_from_toml(R"(
+            [[source]]
+            dbname   = "testdb"
+            user     = "testuser"
+            backfill = false
+        )");
+        REQUIRE(cfg.sources.size() == 1);
+        CHECK(cfg.sources[0].backfill == false);
+    }
+}

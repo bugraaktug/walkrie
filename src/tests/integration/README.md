@@ -1,11 +1,11 @@
 # Integration Tests
 
-Both tests below need a live Postgres + pgvector connection and a real
-embedding provider — that's what makes them integration tests rather than
-part of the `walkrie_tests` doctest suite (`src/tests/`), which needs
-neither. Each uses its own dedicated tables and its own dedicated config
-file, so running one doesn't disturb the other or whatever tables/config
-you use for your own manual testing.
+The tests below need a live Postgres connection — that's what makes them
+integration tests rather than part of the `walkrie_tests` doctest suite
+(`src/tests/`), which needs neither a live database nor (for most cases) a
+real embedding provider. Each uses its own dedicated tables and its own
+dedicated config file, so running one doesn't disturb the other or whatever
+tables/config you use for your own manual testing.
 
 ## Batching Integration Test (`test_sink_batch_mode`)
 
@@ -200,3 +200,51 @@ it a complete, loadable config file.
 
 Exit code is `0` if all cases pass, `1` otherwise — same convention as
 `test_sink_batch_mode`, safe to wire into the same CI step.
+
+## Backfill Dump Integration Test (`test_backfill_dump`)
+
+`test_backfill_dump.cpp` verifies issue #1 / WLK-0001 slice 3 — the dump
+phase and live-event reconciliation actually wired into
+`PgReplicationSource` — against a live Postgres. `test_backfill_util.cpp`
+(doctest suite) covers `BackfillUtil::absorb_event`'s logic in isolation
+with hand-built `ChangeEvent`s; this test drives the real `connect()` /
+`run_backfill_dump_if_required()` / `start_streaming()` sequence the way
+`main.cpp` does, which is the only way to catch a wiring bug like a phase
+never actually being called (this test caught exactly that during
+development).
+
+### Phases
+
+1. **Fresh dump** — two rows inserted before the slot exists ("pre-existing
+   rows"). After `connect()` (asserting `was_slot_freshly_created()`) and
+   `run_backfill_dump_if_required()`, inspects the `BackfillStore` file
+   directly (`is_table_dumped`, `get_row_data`) to confirm both rows landed
+   with the right content.
+2. **Live update merges + suppresses dispatch** — `start_streaming()`, then
+   a real `UPDATE` (metadata column only) on one of the still-pending rows.
+   Asserts the `Update` event never reaches the registered handler (would
+   have gone to sinks in `main.cpp`) while the transaction's `Commit`
+   marker still does, and that the backfill store's `row_data` reflects the
+   merged value while retaining the previously-known embed text.
+3. **Resume doesn't re-dump** — drops the first `PgReplicationSource` (releases
+   the slot's client connection), inserts a third row directly, then
+   connects a second source against the same (now-existing) slot. Asserts
+   `was_slot_freshly_created()` is false and that the third row never made
+   it into the backfill store — the "no effect on resume" invariant.
+
+### Running
+
+```bash
+./test_backfill_dump ../config_samples/config_sample_backfill.toml
+```
+
+Uses `walkrie_it_backfill_table`/`_pub`/`_slot`, distinct from the other
+integration tests' names, and its own SQLite file under the system temp
+directory (removed on both start and successful completion). `[sink]`/
+`[embedding]` in the config exist only to make it a loadable config file —
+this test never constructs a sink or embedding provider, since suppressed
+events are asserted by absence from the handler, not by inspecting a sink
+table.
+
+Exit code is `0` if all phases pass, `1` otherwise — same convention as the
+other integration tests here.

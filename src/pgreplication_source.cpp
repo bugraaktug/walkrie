@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <spdlog/spdlog.h>
 #include <sstream>
+#include <unordered_set>
 
 namespace pgcdc 
 {
@@ -49,7 +50,13 @@ std::string PgReplicationConfig::to_conninfo() const
 }
 
 PgReplicationSource::PgReplicationSource(SourceId id, PgReplicationConfig config)
-    : ReplicationSource(id), config_(std::move(config)) {}
+    : ReplicationSource(id), config_(std::move(config))
+{
+    if (config_.backfill) {
+        backfill_util_ = std::make_unique<BackfillUtil>(
+            config_.to_conninfo(), config_.backfill_table_mappings, config_.backfill_store_path);
+    }
+}
 
 PgReplicationSource::~PgReplicationSource() 
 {
@@ -99,7 +106,38 @@ void PgReplicationSource::resume_slot()
     PQclear(resume_res);
 }
 
-bool PgReplicationSource::connect() 
+std::vector<TableMapping> PgReplicationSource::filter_to_source_publication(const std::vector<TableMapping>& mappings) const
+{
+    std::string sql = "SELECT tablename FROM pg_publication_tables WHERE pubname = '" + config_.publication_name + "'";
+    PGresult* res = PQexec(conn_, sql.c_str());
+    if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+        std::string err = "failed to read publication membership for '" + config_.publication_name + "': " + PQerrorMessage(conn_);
+        PQclear(res);
+        throw std::runtime_error(err);
+    }
+
+    std::unordered_set<std::string> published_tables;
+    for (int r = 0; r < PQntuples(res); ++r) {
+        published_tables.insert(PQgetvalue(res, r, 0));
+    }
+    PQclear(res);
+
+    std::vector<TableMapping> filtered;
+    for (const auto& tm : mappings) {
+        if (published_tables.count(tm.source_table)) {
+            filtered.push_back(tm);
+            spdlog::trace("[PgReplicationSource] [{}] '{}' is in publication '{}' — included in backfill scope",
+                         config_.slot_name, tm.source_table, config_.publication_name);
+        } else {
+            // <<< table_mappings are global to the sink, not scoped per source — exclude ones this source's publication doesn't own
+            spdlog::info("[PgReplicationSource] [{}] '{}' is not a member of publication '{}' — excluding from backfill scope",
+                         config_.slot_name, tm.source_table, config_.publication_name);
+        }
+    }
+    return filtered;
+}
+
+bool PgReplicationSource::connect()
 {
     const std::string conninfo = config_.to_conninfo();
     conn_ = PQconnectdb(conninfo.c_str());
@@ -116,6 +154,7 @@ bool PgReplicationSource::connect()
 
     if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0) {
         start_lsn_ = PQgetvalue(res, 0, 1); // column 1 = consistent_point
+        slot_freshly_created_ = true;
         spdlog::info("[PgReplicationSource] created replication slot '{}', starting at LSN {}",
                      config_.slot_name.c_str(), start_lsn_.c_str());
         PQclear(res);
@@ -124,10 +163,54 @@ bool PgReplicationSource::connect()
         resume_slot();
     }
 
+    if (backfill_util_) {
+        try {
+            backfill_util_->open();
+            backfill_util_->set_table_mappings(filter_to_source_publication(config_.backfill_table_mappings));
+            if (slot_freshly_created_) {
+                backfill_util_->reset(); // <<< fresh slot = new epoch, discard any stale state from a prior slot by this name
+            } else {
+                backfill_util_->reset_stale_claims(); // <<< a worker from the previous process (if any) can't still be alive after a restart
+            }
+        } catch (const std::exception& e) {
+            last_error_ = std::string("backfill store open failed: ") + e.what();
+            return false;
+        }
+    }
+
     last_read_lsn_ = parse_lsn(start_lsn_);
     confirmed_lsn_.store(last_read_lsn_, std::memory_order_relaxed);
     last_status_update_ = std::time(nullptr);
     return true;
+}
+
+bool PgReplicationSource::run_backfill_dump_if_required()
+{
+    if (!backfill_util_) return true;
+    // <<< skip only when backfill was never active for this slot (just flipped on for an existing slot) — resume finishes an interrupted dump
+    if (!slot_freshly_created_ && !backfill_util_->has_prior_dump_state()) {
+        spdlog::trace("[PgReplicationSource] [{}] backfill never active for this slot — skipping dump", config_.slot_name);
+        return true;
+    }
+
+    spdlog::info("[PgReplicationSource] [{}] running backfill dump (fresh_slot={})", config_.slot_name, slot_freshly_created_);
+    if (!backfill_util_->dump_all()) {
+        last_error_ = backfill_util_->last_error();
+        return false;
+    }
+    return true;
+}
+
+bool PgReplicationSource::has_pending_backfill_work() const
+{
+    if (!backfill_util_) return false;
+    try {
+        return backfill_util_->has_pending_work();
+    } catch (const std::exception& e) {
+        spdlog::error("[PgReplicationSource] [{}] has_pending_backfill_work() check failed: {}",
+                     config_.slot_name.c_str(), e.what());
+        return false;
+    }
 }
 
 void PgReplicationSource::set_confirmed_lsn(uint64_t lsn)
@@ -250,7 +333,8 @@ void PgReplicationSource::drain_available_messages()
                    if (events) {
                        for (auto& event : *events) {
                            event.commit_lsn = header->wal_start;
-                           handle_(event, id());
+                           bool absorbed = backfill_util_ && backfill_util_->absorb_event(event);
+                           if (!absorbed) handle_(event, id());
                        }
                    }
                 } catch (const std::exception& e) {

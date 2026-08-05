@@ -1,10 +1,16 @@
 #include <atomic>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <unordered_map>
 #include <vector>
+#include <cerrno>
+#include <cstring>
 #include <csignal>
 #include <getopt.h>
+
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include <event2/event.h>
 #include <spdlog/spdlog.h>
@@ -117,7 +123,103 @@ void on_terminate_poll(evutil_socket_t, short, void* arg)
     }
 }
 
-int main(int argc, char** argv) 
+struct BackfillWorkerHandle
+{
+    pid_t pid;
+    std::string slot_name;
+};
+
+void on_backfill_reap(evutil_socket_t, short, void* arg)
+{
+    auto* workers = static_cast<std::vector<BackfillWorkerHandle>*>(arg);
+    for (auto it = workers->begin(); it != workers->end();) {
+        int status = 0;
+        pid_t res = waitpid(it->pid, &status, WNOHANG);
+        if (res == 0) { ++it; continue; } // still running
+        if (res < 0) {
+            spdlog::error("[BackfillReap] waitpid failed for source '{}' pid={}: {}",
+                         it->slot_name, it->pid, strerror(errno));
+            it = workers->erase(it);
+            continue;
+        }
+        int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+        if (exit_code == 0) {
+            spdlog::info("[BackfillReap] backfill drain complete for source '{}' (pid={})", it->slot_name, it->pid);
+        } else {
+            spdlog::error("[BackfillReap] backfill worker for source '{}' (pid={}) exited with code {} — "
+                         "its rows are left 'claimed' in the store, not retried", it->slot_name, it->pid, exit_code);
+        }
+        it = workers->erase(it);
+    }
+}
+
+std::filesystem::path resolve_backfill_worker_path(const char* argv0)
+{
+    std::error_code ec;
+    auto self_exe = std::filesystem::canonical("/proc/self/exe", ec);
+    return (!ec ? self_exe.parent_path() : std::filesystem::path(argv0).parent_path()) / "walkrie_worker";
+}
+
+event* register_backfill_reap_timer(event_base* base, std::vector<BackfillWorkerHandle>& workers)
+{
+    event* ev = event_new(base, -1, EV_PERSIST, on_backfill_reap, &workers);
+    timeval interval{2, 0};
+    event_add(ev, &interval);
+    return ev;
+}
+
+enum class BackfillSpawnStatus
+{
+    NoPendingWork,       // nothing to drain — not an error, just nothing to do
+    WorkerBinaryMissing,
+    ForkFailed,
+    Spawned,
+};
+
+BackfillSpawnStatus spawn_backfill_worker_if_required(pgcdc::PgReplicationSource& source,
+                                                      const std::string& config_path,
+                                                      const std::filesystem::path& worker_path,
+                                                      std::vector<BackfillWorkerHandle>& workers)
+{
+    if (!source.has_pending_backfill_work()) return BackfillSpawnStatus::NoPendingWork;
+    if (!std::filesystem::exists(worker_path)) return BackfillSpawnStatus::WorkerBinaryMissing;
+
+    pid_t pid = fork();
+    if (pid < 0) return BackfillSpawnStatus::ForkFailed;
+    if (pid == 0) {
+        execl(worker_path.c_str(), worker_path.c_str(),
+              "-c", config_path.c_str(),
+              "--store", source.backfill_store_path().c_str(),
+              "--slot", source.slot_name().c_str(),
+              static_cast<char*>(nullptr));
+        _exit(127); // exec failed
+    }
+
+    workers.push_back({pid, source.slot_name()});
+    spdlog::info("[BackfillSpawn] spawned walkrie_worker pid={} for source '{}'", pid, source.slot_name());
+    return BackfillSpawnStatus::Spawned;
+}
+
+void log_backfill_spawn_status(BackfillSpawnStatus status, const pgcdc::PgReplicationSource& source,
+                                const std::filesystem::path& worker_path)
+{
+    switch (status) {
+        case BackfillSpawnStatus::NoPendingWork:
+            spdlog::trace("[BackfillSpawn] no pending backfill work for source '{}' — not spawning a worker", source.slot_name());
+            break;
+        case BackfillSpawnStatus::Spawned:
+            break;
+        case BackfillSpawnStatus::WorkerBinaryMissing:
+            spdlog::error("[BackfillSpawn] walkrie_worker binary not found at {} — skipping backfill drain for source '{}'",
+                         worker_path.string(), source.slot_name());
+            break;
+        case BackfillSpawnStatus::ForkFailed:
+            spdlog::error("[BackfillSpawn] fork failed for source '{}': {}", source.slot_name(), strerror(errno));
+            break;
+    }
+}
+
+int main(int argc, char** argv)
 {
     Options opts = parse_args(argc, argv);
 
@@ -144,6 +246,8 @@ int main(int argc, char** argv)
         return 1;
     }
     
+    const std::filesystem::path backfill_worker_path = resolve_backfill_worker_path(argv[0]);
+
     if (!opts.foreground) {
         pgcdc::daemonize(opts.pid_file);
     }
@@ -173,9 +277,18 @@ int main(int argc, char** argv)
     timeval terminate_poll_interval{0, 200000};
     event_add(terminate_poll_ev, &terminate_poll_interval);
 
+    std::vector<BackfillWorkerHandle> backfill_workers;
+    event* backfill_reap_ev = register_backfill_reap_timer(base, backfill_workers);
+
     auto dispatcher = std::make_unique<pgcdc::EventDispatcher>(
             cfg.settings.batch_size,
             std::chrono::milliseconds(cfg.settings.batch_timeout_ms));
+
+    std::vector<pgcdc::TableMapping> backfill_table_mappings; // <<< union across all sinks' mappings, same scope live dispatch already uses
+    for (const auto& sink_instance : cfg.sinks) {
+        auto tms = sink_instance->mappings();
+        backfill_table_mappings.insert(backfill_table_mappings.end(), tms.begin(), tms.end());
+    }
 
     std::vector<std::unique_ptr<pgcdc::PgReplicationSource>> sources;
     SourceId next_source_id = 1;
@@ -188,6 +301,11 @@ int main(int argc, char** argv)
     	src_config.password         = src.password;
     	src_config.slot_name        = src.slot_name;
     	src_config.publication_name = src.publication;
+    	src_config.backfill         = src.backfill;
+    	if (src.backfill) {
+    	    src_config.backfill_table_mappings = backfill_table_mappings;
+    	    src_config.backfill_store_path     = cfg.settings.backfill_dir + "/" + src.slot_name + ".sqlite3";
+    	}
     	sources.push_back(std::make_unique<pgcdc::PgReplicationSource>(next_source_id++, src_config));
     }
 
@@ -209,8 +327,9 @@ int main(int argc, char** argv)
         event_free(sigterm_ev);
         event_free(sigint_ev);
         event_free(terminate_poll_ev);
+        event_free(backfill_reap_ev);
         event_base_free(base);
-        
+
         pgcdc::http_global_cleanup();
         if (!opts.foreground) {
             pgcdc::remove_pid_file(opts.pid_file);
@@ -244,6 +363,20 @@ int main(int argc, char** argv)
             event_base_free(base);
             return 1;
         }
+
+        if (!source->run_backfill_dump_if_required()) {
+            std::cerr << "Source backfill dump failed: " << source->last_error() << "\n";
+            spdlog::error("Source backfill dump failed - {}", source->last_error());
+            event_base_free(base);
+            return 1;
+        }
+
+        auto spawn_status = spawn_backfill_worker_if_required(*source, opts.config_path, 
+                                                              backfill_worker_path, backfill_workers);
+        if (spawn_status != BackfillSpawnStatus::Spawned) {
+            log_backfill_spawn_status(spawn_status, *source, backfill_worker_path);
+        }
+
         if (!source->start_streaming()) {
             std::cerr << "Source replication streaming failed: " << source->last_error() << "\n";
             spdlog::error("Source replication streaming failed - {}", source->last_error());
@@ -277,10 +410,12 @@ int main(int argc, char** argv)
     for (auto& source : sources) {
         source->flush_confirmed_lsn(); // periodic timer won't fire again post-loopbreak; send the final ack now
     }
+
     sources.clear();
     event_free(sigterm_ev);
     event_free(sigint_ev);
     event_free(terminate_poll_ev);
+    event_free(backfill_reap_ev);
     event_base_free(base);
 
     pgcdc::http_global_cleanup();
