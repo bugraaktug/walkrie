@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <spdlog/spdlog.h>
 #include <sstream>
+#include <unordered_set>
 
 namespace pgcdc 
 {
@@ -53,7 +54,7 @@ PgReplicationSource::PgReplicationSource(SourceId id, PgReplicationConfig config
 {
     if (config_.backfill) {
         backfill_util_ = std::make_unique<BackfillUtil>(
-            config_.to_conninfo(), config_.backfill_table_mappings, config_.backfill_store_path, config_.publication_name);
+            config_.to_conninfo(), config_.backfill_table_mappings, config_.backfill_store_path);
     }
 }
 
@@ -105,7 +106,36 @@ void PgReplicationSource::resume_slot()
     PQclear(resume_res);
 }
 
-bool PgReplicationSource::connect() 
+std::vector<TableMapping> PgReplicationSource::filter_to_source_publication(const std::vector<TableMapping>& mappings) const
+{
+    std::string sql = "SELECT tablename FROM pg_publication_tables WHERE pubname = '" + config_.publication_name + "'";
+    PGresult* res = PQexec(conn_, sql.c_str());
+    if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+        std::string err = "failed to read publication membership for '" + config_.publication_name + "': " + PQerrorMessage(conn_);
+        PQclear(res);
+        throw std::runtime_error(err);
+    }
+
+    std::unordered_set<std::string> published_tables;
+    for (int r = 0; r < PQntuples(res); ++r) {
+        published_tables.insert(PQgetvalue(res, r, 0));
+    }
+    PQclear(res);
+
+    std::vector<TableMapping> filtered;
+    for (const auto& tm : mappings) {
+        if (published_tables.count(tm.source_table)) {
+            filtered.push_back(tm);
+        } else {
+            // <<< table_mappings are global to the sink, not scoped per source — exclude ones this source's publication doesn't own
+            spdlog::info("[PgReplicationSource] [{}] '{}' is not a member of publication '{}' — excluding from backfill scope",
+                         config_.slot_name, tm.source_table, config_.publication_name);
+        }
+    }
+    return filtered;
+}
+
+bool PgReplicationSource::connect()
 {
     const std::string conninfo = config_.to_conninfo();
     conn_ = PQconnectdb(conninfo.c_str());
@@ -134,6 +164,8 @@ bool PgReplicationSource::connect()
     if (backfill_util_) {
         try {
             backfill_util_->open();
+            backfill_util_->set_table_mappings(filter_to_source_publication(config_.backfill_table_mappings));
+            if (slot_freshly_created_) backfill_util_->reset(); // <<< fresh slot = new epoch, discard any stale state from a prior slot by this name
         } catch (const std::exception& e) {
             last_error_ = std::string("backfill store open failed: ") + e.what();
             return false;

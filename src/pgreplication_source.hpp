@@ -79,6 +79,8 @@ private:
 
     static void on_read(evutil_socket_t fd, short events, void* arg);
     static void on_timer(evutil_socket_t fd, short events, void* arg);
+    
+    std::vector<TableMapping> filter_to_source_publication(const std::vector<TableMapping>& mappings) const;
 };
 
 } // namespace pgcdc

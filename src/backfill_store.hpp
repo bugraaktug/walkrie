@@ -20,9 +20,10 @@ public:
     BackfillStore& operator=(const BackfillStore&) = delete;
 
     void open();
+    void reset(); // <<< clears all rows + dump_complete markers — call when the underlying slot is freshly (re)created, discarding any prior epoch's state
 
     void insert_row(const std::string& source_table, const std::string& row_id,
-                     const std::string& row_data_json); // INSERT OR IGNORE — idempotent re-dump
+                    const std::string& row_data_json); // INSERT OR IGNORE — idempotent re-dump
     void mark_table_dumped(const std::string& source_table);
     bool is_table_dumped(const std::string& source_table) const;
 

@@ -79,6 +79,13 @@ void BackfillStore::open()
     spdlog::debug("[BackfillStore] opened '{}'", db_path_);
 }
 
+void BackfillStore::reset()
+{
+    exec_or_throw(db_, "DELETE FROM backfill_rows");
+    exec_or_throw(db_, "DELETE FROM backfill_tables");
+    spdlog::info("[BackfillStore] reset '{}' — discarded prior epoch's state", db_path_);
+}
+
 void BackfillStore::insert_row(const std::string& source_table, const std::string& row_id,
                                 const std::string& row_data_json)
 {

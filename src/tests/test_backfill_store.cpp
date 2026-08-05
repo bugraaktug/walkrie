@@ -146,6 +146,21 @@ TEST_SUITE("BackfillStore")
         CHECK(store.is_table_dumped("users"));
     }
 
+    TEST_CASE("reset clears rows and dump_complete markers")
+    {
+        pgcdc::BackfillStore store(temp_db_path());
+        store.open();
+
+        store.insert_row("users", "1", "{}");
+        store.mark_table_dumped("users");
+
+        store.reset();
+
+        CHECK_FALSE(store.is_table_dumped("users"));
+        auto claimed = store.claim_pending(10);
+        CHECK(claimed.empty());
+    }
+
     TEST_CASE("data persists across separate BackfillStore instances on the same file")
     {
         auto path = temp_db_path();

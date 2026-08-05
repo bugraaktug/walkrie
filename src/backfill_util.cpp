@@ -2,7 +2,6 @@
 
 #include <filesystem>
 #include <sstream>
-#include <unordered_set>
 
 #include <libpq-fe.h>
 #include <spdlog/spdlog.h>
@@ -10,11 +9,10 @@
 namespace pgcdc
 {
 
-BackfillUtil::BackfillUtil(std::string conninfo, std::vector<TableMapping> table_mappings, std::string store_path, std::string publication_name)
+BackfillUtil::BackfillUtil(std::string conninfo, std::vector<TableMapping> table_mappings, std::string store_path)
     : conninfo_(std::move(conninfo))
     , table_mappings_(std::move(table_mappings))
     , store_path_(std::move(store_path))
-    , publication_name_(std::move(publication_name))
     , store_(store_path_) {}
 
 void BackfillUtil::open()
@@ -24,6 +22,16 @@ void BackfillUtil::open()
         std::filesystem::create_directories(p.parent_path());
     }
     store_.open();
+}
+
+void BackfillUtil::set_table_mappings(std::vector<TableMapping> table_mappings)
+{
+    table_mappings_ = std::move(table_mappings);
+}
+
+void BackfillUtil::reset()
+{
+    store_.reset();
 }
 
 const TableMapping* BackfillUtil::find_mapping(const std::string& source_table) const
@@ -76,29 +84,8 @@ bool BackfillUtil::dump_all()
         return false;
     }
 
-    std::unordered_set<std::string> published_tables;
-    {
-        std::string sql = "SELECT tablename FROM pg_publication_tables WHERE pubname = '" + publication_name_ + "'";
-        PGresult* res = PQexec(conn, sql.c_str());
-        if (PQresultStatus(res) != PGRES_TUPLES_OK) {
-            last_error_ = "failed to read publication membership for '" + publication_name_ + "': " + PQerrorMessage(conn);
-            PQclear(res);
-            PQfinish(conn);
-            return false;
-        }
-        for (int r = 0; r < PQntuples(res); ++r) {
-            published_tables.insert(PQgetvalue(res, r, 0));
-        }
-        PQclear(res);
-    }
-
     bool ok = true;
-    for (const auto& tm : table_mappings_) {
-        if (!published_tables.count(tm.source_table)) {
-            // <<< table_mappings are global to the sink, not scoped per source — skip ones this source's publication doesn't own
-            spdlog::info("[BackfillUtil] skipping '{}' — not a member of publication '{}' for this source", tm.source_table, publication_name_);
-            continue;
-        }
+    for (const auto& tm : table_mappings_) { // <<< caller narrows this to the source's own publication via set_table_mappings() before calling
         if (store_.is_table_dumped(tm.source_table)) continue; // <<< already dumped in a prior (possibly crashed) run
 
         std::vector<std::string> select_cols = {tm.id_source_, tm.embed_source_};

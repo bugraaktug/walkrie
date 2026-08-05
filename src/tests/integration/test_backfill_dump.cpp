@@ -311,6 +311,37 @@ int main(int argc, char** argv)
     }
     source2.reset();
 
+    // --- Phase D: manually dropping and recreating the slot must re-dump, even though
+    // the store still carries stale dump_complete markers from the previous epoch (WLK-1 bug) ---
+    exec_ignore_errors(admin, "SELECT pg_drop_replication_slot('" + opts.slot + "')");
+    exec_or_die(admin, "INSERT INTO " + opts.table + " (id, body, category) VALUES (4, 'delta body', 'cat-d')");
+
+    auto source3 = std::make_unique<pgcdc::PgReplicationSource>(/*id=*/3, src_cfg);
+    if (!source3->connect()) {
+        std::cerr << "source3 connect failed: " << source3->last_error() << "\n";
+        return 1;
+    }
+    if (!source3->was_slot_freshly_created()) {
+        std::cout << "FAIL: expected a fresh slot after manual drop+recreate\n";
+        ok = false;
+    }
+    if (!source3->run_backfill_dump_if_required()) {
+        std::cerr << "run_backfill_dump_if_required (post manual drop) failed: " << source3->last_error() << "\n";
+        return 1;
+    }
+
+    {
+        pgcdc::BackfillStore inspect(store_path.string());
+        inspect.open();
+        auto row4 = inspect.get_row_data(opts.table, "4");
+        if (!row4 || row4->find("delta body") == std::string::npos) {
+            std::cout << "FAIL: manual slot drop+recreate did not re-dump — stale dump_complete "
+                       << "marker from the prior epoch blocked it\n";
+            ok = false;
+        }
+    }
+    source3.reset();
+
     // Cleanup.
     exec_ignore_errors(admin, "SELECT pg_drop_replication_slot('" + opts.slot + "')");
     exec_ignore_errors(admin, "DROP PUBLICATION IF EXISTS " + opts.publication);

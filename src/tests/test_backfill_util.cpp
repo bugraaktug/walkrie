@@ -73,7 +73,7 @@ TEST_SUITE("BackfillUtil")
     {
         auto path = temp_db_path();
         seed_row(path, "users", "1", R"({"id":"1","body":"hello","category":"x"})");
-        pgcdc::BackfillUtil util("", {make_mapping()}, path, "");
+        pgcdc::BackfillUtil util("", {make_mapping()}, path);
         util.open();
 
         pgcdc::ChangeEvent ev;
@@ -90,7 +90,7 @@ TEST_SUITE("BackfillUtil")
     {
         auto path = temp_db_path();
         seed_row(path, "users", "1", R"({"id":"1","body":"hello","category":"x"})");
-        pgcdc::BackfillUtil util("", {make_mapping()}, path, "");
+        pgcdc::BackfillUtil util("", {make_mapping()}, path);
         util.open();
 
         pgcdc::ChangeEvent ev;
@@ -106,7 +106,7 @@ TEST_SUITE("BackfillUtil")
     {
         auto path = temp_db_path();
         seed_row(path, "users", "1", R"({"id":"1","body":"hello","category":"x"})");
-        pgcdc::BackfillUtil util("", {make_mapping()}, path, "");
+        pgcdc::BackfillUtil util("", {make_mapping()}, path);
         util.open();
 
         pgcdc::ChangeEvent ev;
@@ -123,7 +123,7 @@ TEST_SUITE("BackfillUtil")
     {
         auto path = temp_db_path();
         seed_row(path, "users", "1", R"({"id":"1","body":"hello","category":"x"})");
-        pgcdc::BackfillUtil util("", {make_mapping()}, path, "");
+        pgcdc::BackfillUtil util("", {make_mapping()}, path);
         util.open();
 
         pgcdc::ChangeEvent ev;
@@ -140,7 +140,7 @@ TEST_SUITE("BackfillUtil")
     {
         auto path = temp_db_path();
         seed_row(path, "users", "1", R"({"id":"1","body":"hello","category":"x"})");
-        pgcdc::BackfillUtil util("", {make_mapping()}, path, "");
+        pgcdc::BackfillUtil util("", {make_mapping()}, path);
         util.open();
 
         pgcdc::ChangeEvent ev;
@@ -156,7 +156,7 @@ TEST_SUITE("BackfillUtil")
     TEST_CASE("absorb_event on Update is a no-op when the row isn't in the store")
     {
         auto path = temp_db_path();
-        pgcdc::BackfillUtil util("", {make_mapping()}, path, ""); // nothing seeded — never dumped, or already drained
+        pgcdc::BackfillUtil util("", {make_mapping()}, path); // nothing seeded — never dumped, or already drained
         util.open();
 
         pgcdc::ChangeEvent ev;
@@ -173,7 +173,7 @@ TEST_SUITE("BackfillUtil")
     {
         auto path = temp_db_path();
         seed_row(path, "orders", "1", "{}");
-        pgcdc::BackfillUtil util("", {make_mapping()}, path, ""); // only maps "users"
+        pgcdc::BackfillUtil util("", {make_mapping()}, path); // only maps "users"
         util.open();
 
         pgcdc::ChangeEvent ev;
@@ -189,7 +189,7 @@ TEST_SUITE("BackfillUtil")
     {
         auto path = temp_db_path();
         seed_row(path, "users", "1", "{}");
-        pgcdc::BackfillUtil util("", {make_mapping()}, path, "");
+        pgcdc::BackfillUtil util("", {make_mapping()}, path);
         util.open();
 
         pgcdc::ChangeEvent commit_ev;
