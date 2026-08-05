@@ -10,7 +10,7 @@ Built in native C++ using asynchronous `libevent` I/O and a lock-free single-pro
 
 ## Why Walkrie
 
-Most CDC-to-vector pipelines today are built from general-purpose tools (Debezium + Kafka + a custom consumer, or scripted polling jobs) that carry real operational cost: a mandatory message broker, WAL disk bloat from slow consumers, table locks during initial snapshots, and fragile handling of schema changes. Walkrie is a single native binary with no external message broker dependency — it reads the replication slot directly and writes to your vector sink directly.
+Most CDC-to-vector pipelines today are built from general-purpose tools (Debezium + Kafka + a custom consumer, or scripted polling jobs) that carry real operational cost: a mandatory message broker, WAL disk bloat from slow consumers, table locks during initial snapshots, and fragile handling of schema changes. Walkrie is a single native binary with no external message broker dependency — it reads the replication slot directly and writes to your vector sink directly. (The initial backfill scan's dump step briefly retains WAL until it finishes, but never takes a table lock.)
 
 * **Lock-Free Pipeline Architecture** — Isolates network-bound embedding API calls from the core replication read path using a lock-free SPSC queue, so a slow or rate-limited embedding provider doesn't block WAL consumption.
 * **Native Logical Replication Listener** — Reads directly from a PostgreSQL logical replication slot (`pgoutput`) using `libevent`'s non-blocking I/O — no polling, no external broker.
@@ -25,6 +25,7 @@ Most CDC-to-vector pipelines today are built from general-purpose tools (Debeziu
 * **Skip-unchanged & null-safety checks** — update events skip re-embedding when the source text didn't actually change (TOAST-unchanged column, or identical old/new value), and rows with a missing id or embed value are dropped before any embedding call — avoiding wasted API/inference cost on no-op updates.
 * **`TRUNCATE` support** — truncating a watched table (including via `CASCADE`) is no longer a silent gap: it's decoded per relation and applied as a bulk delete against the sink table, scoped to that table's discriminator when configured (see TECHNICAL.md).
 * **Optional event batching** — group multiple change events into a single batched embedding call (`batch_size`/`batch_timeout_ms` in config) instead of one call per row. Off by default (`batch_size = 1`). Both providers now implement real batched embedding: the OpenAI provider measures ~7.3× lower per-row latency at a batch size of 10 (one HTTP call instead of ten), and the local Llama provider now does genuine multi-sequence `llama_encode()` batching too — though, measured so far, it's ~20% *slower* per row than sequential calls on tested hardware rather than a win (see PERFORMANCE.md and TECHNICAL.md's Known Limitations for the numbers and the working hypothesis why).
+* **Initial backfill scan for pre-existing rows** (`backfill = true` per `[[source]]`) — CDC alone only ever captures rows changed *after* a replication slot exists, so on first-ever slot creation Walkrie additionally scans and embeds whatever rows were already in each mapped table, without pausing live streaming while it does. The scan runs in a separate `walkrie_worker` process (real OS-level parallelism for the embedding calls, not just threads sharing one provider), reconciles correctly against concurrent live writes to the same rows during the scan window, and resumes cleanly across a crash of either the main process or the worker — see TECHNICAL.md for the design.
 * **Upsert-based sink writes** — idempotent by design; replays and reconnects don't duplicate rows.
 * **Config validation at startup** — required fields, embedding provider settings, and (for the local Llama provider) the model file's existence, type, readability, and non-zero size are all checked before the daemon starts, so misconfiguration produces a clear error message instead of a crash loop.
 * **Foreground and daemon modes** — run under systemd (`-f` foreground) or as a classic detached daemon (double-fork, PID file, signal-based graceful shutdown on SIGTERM/SIGINT).
@@ -34,7 +35,6 @@ Most CDC-to-vector pipelines today are built from general-purpose tools (Debeziu
 * Root-cause why local Llama batching doesn't reduce latency (dense non-causal attention over the combined ubatch is the working hypothesis — see TECHNICAL.md's Known Limitations) and re-benchmark once profiling confirms the mechanism and on non-VM hardware.
 * Vector index management helpers (HNSW index creation/verification on sink tables).
 * Multi-threaded embedding worker pool (multiple `llama_context` instances sharing one loaded model) to use more available CPU cores concurrently.
-* Snapshot-consistent initial backfill for tables with pre-existing rows, using the point-in-time snapshot for Postgres
 
 ## Target Customers
 

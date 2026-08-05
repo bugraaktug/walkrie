@@ -211,6 +211,15 @@ target_include_directories(embed_backfill_batched_bench PRIVATE
 )
 target_link_libraries(embed_backfill_batched_bench PRIVATE walkrie_core)
 
+# --- real end-to-end backfill bench (real dump_all + real walkrie_worker + real live-load overlap, no synthetic batching) ---
+add_executable(backfill_bench src/bench/backfill_bench.cpp)
+target_include_directories(backfill_bench PRIVATE
+    src
+    src/include
+    src/third_party
+)
+target_link_libraries(backfill_bench PRIVATE walkrie_core)
+
 # --- demo ---
 add_executable(candidate_search demo/candidate_search_tool.cpp)
 target_include_directories(candidate_search PRIVATE src src/include src/third_party)
