@@ -74,6 +74,7 @@ add_library(walkrie_core STATIC
     src/pgembedding_sink.cpp
     src/model/gguf_metadata_reader.cpp
     src/backfill_store.cpp
+    src/backfill_manager.cpp
     src/backfill_util.cpp
     src/backfill_worker.cpp
 )
