@@ -1,6 +1,7 @@
 # Keep the build context small — none of this is needed to build walkrie.
 .git
 build/
+obj-*-linux-gnu/
 third_party/llama.cpp/build/
 third_party/llama.cpp/build-*/
 

@@ -136,11 +136,11 @@ make -j$(nproc)
 ## Installation (pre-built `.deb` package)
 
 ```bash
-sudo dpkg -i walkrie_1.1.0~alpha1-1_amd64.deb
+sudo dpkg -i walkrie_1.2.0~alpha1-1_amd64.deb
 sudo apt install -f
 ```
 
-This installs the binary to `/usr/bin/walkrie`, a config template to `/etc/walkrie/config.toml`, a systemd unit (enabled, not auto-started), and creates `/var/lib/walkrie/models/` and `/var/log/walkrie/`. See the README's [Installation](./README.md#installation-debianubuntu) section for the post-install steps (model placement, config editing, service start).
+This installs `/usr/bin/walkrie` and `/usr/bin/walkrie_worker` (the latter spawned automatically by `walkrie` to drain `backfill = true` sources, resolved from the same directory — see Spawn/Reap below), a config template to `/etc/walkrie/config.toml`, a systemd unit (enabled, not auto-started), and creates `/var/lib/walkrie/models/`, `/var/lib/walkrie/backfill/` (per-source SQLite staging stores, see Initial Backfill Scan below), and `/var/log/walkrie/`. See the README's [Installation](./README.md#installation-debianubuntu) section for the post-install steps (model placement, config editing, service start).
 
 ### Model Installation
 

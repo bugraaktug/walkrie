@@ -1,5 +1,37 @@
-walkrie (1.1.1~alpha1-1) unstable; urgency=low
+walkrie (1.2.0~alpha1-1) unstable; urgency=low
 
+  * LSN acknowledgment is now tied to durable sink writes, not to WAL
+    parsing. Previously the confirmed LSN advanced the instant a message
+    was parsed, so a crash between decode and a sink's durable write
+    caused silent data loss on restart. EventDispatcher now tracks each
+    source's confirmed LSN per batch and only advances it once every
+    required sink has durably applied that batch. See TECHNICAL.md's
+    Isolation Layer section.
+  * New per-sink durability tiers: each sink is `required` (default;
+    failure blocks confirmation and retries) or best-effort
+    (`required = false` in that sink's `[[sink]]` block; failure is
+    logged and skipped). A required sink retries with exponential
+    backoff (500ms initial, 60s stall ceiling) before triggering a
+    graceful shutdown rather than looping forever or silently dropping
+    data.
+  * Fixed a related LSN-correctness bug: every ChangeEvent was stamped
+    with the WAL position of its own row-change message rather than its
+    transaction's real commit LSN, and Commit messages produced no event
+    at all — so the confirmed LSN could never reach a transaction's true
+    commit boundary, risking replay of already-applied transactions on
+    restart. Commit messages now yield an Op::Commit marker event
+    carrying the correct commit LSN. See TECHNICAL.md's Decode Layer
+    section.
+  * Initial backfill scan (WLK-0001): `backfill = true` on a `[[source]]`
+    dumps pre-existing rows (as of that source's replication slot
+    creation) into a local per-source SQLite staging store, then drains
+    them via a separate `walkrie_worker` process running concurrently
+    with live CDC streaming. Live events for still-pending rows are
+    reconciled into the staged copy rather than raced against it, so the
+    two paths never conflict, and crash-resume covers both an
+    interrupted dump and a worker that died mid-drain. See TECHNICAL.md
+    section 5 and PERFORMANCE.md section 7 for a real end-to-end
+    (OpenAI) throughput benchmark.
   * Fixed a silent data gap: TRUNCATE (including CASCADE) on a watched
     source table previously produced no ChangeEvent at all, leaving the
     corresponding sink rows behind indefinitely. pgoutput_parser now
@@ -11,8 +43,41 @@ walkrie (1.1.1~alpha1-1) unstable; urgency=low
     every row in the (shared) sink table — logged as a warning. See
     TECHNICAL.md's Decode Layer / Sink Layer sections and the "Note on
     TRUNCATE" under discriminator config for details.
+  * Fixed missing libsqlite3-dev in debian/control's Build-Depends and in
+    the Dockerfile's build-stage apt-get list (present in CMakeLists.txt's
+    find_package(SQLite3) requirement, needed by the new backfill staging
+    store, absent from both since it was introduced).
+  * Fixed a packaging gap in both the .deb and the Docker image: the
+    `walkrie_worker` binary (spawned by `walkrie` to drain backfill work,
+    resolved from the same directory as the `walkrie` binary itself) was
+    never installed — CMakeLists.txt's install() rule only listed the
+    `walkrie` target, and the Dockerfile only built/copied that same
+    target. Any `backfill = true` source would have failed to spawn its
+    worker on either install path. Now installed alongside `walkrie` in
+    `/usr/bin/` in both.
+  * Fixed a second backfill packaging gap, also in both the .deb and the
+    Docker image: the default backfill SQLite staging directory
+    (`/var/lib/walkrie/backfill`) was never created — `BackfillStore::
+    open()` doesn't create its own parent directory, and only `models/`
+    was staged (via debian/walkrie.dirs for the .deb, via the Dockerfile's
+    `mkdir -p` for the image). Any `backfill = true` source would have
+    failed to open its store on either install path. `backfill/` is now
+    created (and chowned, via the existing recursive `/var/lib/walkrie`
+    postinst step / Dockerfile chown) alongside
+    `models/`.
+  * THIRD-PARTY-LICENSES.md now documents SQLite (Public Domain, system
+    dependency via libsqlite3-dev) — missing since the backfill staging
+    store introduced it as a dependency. Also now actually shipped in the
+    .deb (usr/share/doc/walkrie/) — debian/walkrie.install never listed
+    it alongside README/TECHNICAL/PERFORMANCE.
+  * Added a GitHub Actions CI workflow: build + unit test (ctest) on
+    every push/PR to main.
+  * Known limitation: per-sink queues (isolating one stuck required sink
+    from the rest of the pipeline) remain a stated future direction, not
+    yet implemented — a stuck required sink still stalls the whole
+    pipeline.
 
- -- bugra <bugraaktug@gmail.com>  Sat, 01 Aug 2026 12:00:00 +0300
+ -- bugra <bugraaktug@gmail.com>  Thu, 06 Aug 2026 12:00:00 +0300
 
 walkrie (1.1.0~alpha1-1) unstable; urgency=low
 

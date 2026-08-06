@@ -46,7 +46,7 @@ Most CDC-to-vector pipelines today are built from general-purpose tools (Debeziu
 Walkrie ships as a `.deb` package. After installing:
 
 ```bash
-sudo dpkg -i walkrie_1.1.0~alpha1-1_amd64.deb
+sudo dpkg -i walkrie_1.2.0~alpha1-1_amd64.deb
 sudo apt install -f   # resolve any missing runtime dependencies
 ```
 
@@ -56,6 +56,7 @@ The package creates a dedicated `walkrie` system user, installs a systemd unit (
 |---|---|
 | `/etc/walkrie/config.toml` | Configuration file (edit this before starting) |
 | `/var/lib/walkrie/models/` | Place your local embedding model (`.gguf`) file here |
+| `/var/lib/walkrie/backfill/` | Per-source SQLite staging store for `backfill = true` sources (`<slot_name>.sqlite3`) — managed automatically, nothing to place here |
 | `/var/log/walkrie/` | Log output |
 | `/run/walkrie/walkrie.pid` | PID file (systemd-managed) |
 
@@ -77,7 +78,7 @@ If `config.toml` is invalid or the model file is missing/unreadable, `walkrie` w
 
 ```bash
 git submodule update --init --recursive   # if not already done
-docker build -t walkrie:1.1.0-alpha1 .
+docker build -t walkrie:1.2.0-alpha1 .
 ```
 
 No config is baked into the image — `config_sample.toml`'s placeholder credentials and `host = "localhost"` mean something different inside a container, so walkrie refuses to start with the same clear config-validation error described above until you bind-mount your own:
@@ -87,7 +88,7 @@ docker run --rm \
     -v "$(pwd)/config.toml:/etc/walkrie/config.toml:ro" \
     -v "$(pwd)/models:/var/lib/walkrie/models:ro" \
     -v "$(pwd)/logs:/var/log/walkrie" \
-    walkrie:1.1.0-alpha1
+    walkrie:1.2.0-alpha1
 ```
 
 * If your Postgres source/sink runs on the Docker host rather than in the same container network, point `config.toml`'s `host` at `host.docker.internal` (works out of the box with Docker Desktop on Mac/Windows) rather than `localhost`.

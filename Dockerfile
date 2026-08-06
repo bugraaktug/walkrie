@@ -5,7 +5,7 @@
 # image, then copy just the binary into a minimal runtime image.
 #
 # Build:
-#   docker build -t walkrie:1.1.0-alpha1 .
+#   docker build -t walkrie:1.2.0-alpha1 .
 #
 # third_party/llama.cpp must already be checked out (a plain `git clone`
 # without --recurse-submodules leaves it empty — see TECHNICAL.md's
@@ -26,6 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libcurl4-openssl-dev \
         nlohmann-json3-dev \
         libspdlog-dev \
+        libsqlite3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -36,10 +37,13 @@ COPY . .
 RUN test -f third_party/llama.cpp/CMakeLists.txt || \
     (echo "third_party/llama.cpp is empty — run 'git submodule update --init --recursive' before 'docker build'" >&2 && exit 1)
 
-# Only the `walkrie` target — skips walkrie_tests/benches/demo binaries,
-# which this image doesn't need and which would otherwise slow the build.
+# Only the `walkrie`/`walkrie_worker` targets — skips walkrie_tests/benches/
+# demo binaries, which this image doesn't need and which would otherwise
+# slow the build. walkrie_worker is required at runtime: walkrie spawns it
+# (from the same directory it's running from) to drain `backfill = true`
+# sources — see TECHNICAL.md's Initial Backfill Scan section.
 RUN cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_SHARED_LIBS=OFF \
-    && cmake --build build --target walkrie -j"$(nproc)"
+    && cmake --build build --target walkrie walkrie_worker -j"$(nproc)"
 
 # ---- runtime stage ----
 FROM debian:12-slim AS runtime
@@ -47,7 +51,7 @@ FROM debian:12-slim AS runtime
 LABEL org.opencontainers.image.title="walkrie" \
       org.opencontainers.image.description="PostgreSQL WAL to vector embedding sync engine" \
       org.opencontainers.image.source="https://github.com/bugraaktug/walkrie" \
-      org.opencontainers.image.version="1.1.0-alpha1"
+      org.opencontainers.image.version="1.2.0-alpha1"
 
 # Runtime shared libs only — llama.cpp/ggml are statically linked in
 # (BUILD_SHARED_LIBS=OFF above), same as the .deb package's Depends, plus
@@ -62,13 +66,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libcurl4 \
         libfmt9 \
         libgomp1 \
+        libsqlite3-0 \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --create-home --home-dir /var/lib/walkrie --shell /usr/sbin/nologin walkrie \
-    && mkdir -p /etc/walkrie /var/lib/walkrie/models /var/log/walkrie /usr/share/doc/walkrie \
+    && mkdir -p /etc/walkrie /var/lib/walkrie/models /var/lib/walkrie/backfill /var/log/walkrie /usr/share/doc/walkrie \
     && chown -R walkrie:walkrie /var/lib/walkrie /var/log/walkrie
 
 COPY --from=build /src/build/walkrie /usr/bin/walkrie
+COPY --from=build /src/build/walkrie_worker /usr/bin/walkrie_worker
 COPY --chown=walkrie:walkrie config_sample.toml /usr/share/doc/walkrie/config.toml.example
 COPY --chown=walkrie:walkrie README.md TECHNICAL.md PERFORMANCE.md /usr/share/doc/walkrie/
 

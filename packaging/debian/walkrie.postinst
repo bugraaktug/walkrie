@@ -14,8 +14,9 @@ case "$1" in
 
         # /var/log/walkrie and /var/lib/walkrie are normally created by
         # systemd's LogsDirectory=/StateDirectory= on first start, but we
-        # set ownership here too so `models/` (created by .dirs) and the
-        # config file are correct even before the service's first run.
+        # set ownership here too so `models/`+`backfill/` (created by
+        # .dirs) and the config file are correct even before the
+        # service's first run.
         chown -R walkrie:walkrie /var/lib/walkrie 2>/dev/null || true
 
         chown root:walkrie /etc/walkrie/config.toml

@@ -231,6 +231,6 @@ add_test(NAME unit_tests COMMAND walkrie_tests)
 
 # -- packaging --
 # Add install rules (needed for `make install` / packaging):
-install(TARGETS walkrie RUNTIME DESTINATION bin)
+install(TARGETS walkrie walkrie_worker RUNTIME DESTINATION bin)
 install(FILES config_sample.toml DESTINATION share/walkrie RENAME config.toml.example)
 

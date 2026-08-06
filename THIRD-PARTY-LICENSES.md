@@ -316,6 +316,32 @@ the copyright holder.
 
 ---
 
+## SQLite
+
+**License**: Public Domain
+**Location in repo**: system dependency (`libsqlite3-dev`), not vendored — backs `BackfillStore`'s per-source staging store (`src/backfill_store.hpp/.cpp`)
+
+```
+SQLite Copyright
+
+All of the code and documentation in SQLite has been dedicated to the
+public domain by the authors. All code authors, and representatives of
+the companies they work for, have signed affidavits dedicating their
+contributions to the public domain and originals of those signed
+affidavits are stored in a firesafe at the main offices of Hwaci.
+Anyone is free to copy, modify, publish, use, compile, sell, or
+distribute the original SQLite code, either in source code form or as a
+compiled binary, for any purpose, commercial or non-commercial, and by
+any means.
+
+See https://www.sqlite.org/copyright.html for the full statement.
+```
+
+No attribution is legally required for public-domain code; listed here
+for completeness alongside walkrie's other dependencies.
+
+---
+
 ## Summary table
 
 | Dependency | License | Vendored or system dep |
@@ -329,6 +355,7 @@ the copyright holder.
 | libpq | PostgreSQL License | System dependency |
 | libevent | BSD-3-Clause | System dependency |
 | libcurl | curl license (MIT/X derivate) | System dependency |
+| SQLite | Public Domain | System dependency |
 
 All licenses above are permissive and compatible with Apache 2.0 — none
 impose copyleft obligations on walkrie's own source code.
