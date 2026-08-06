@@ -1,0 +1,66 @@
+name: CMake build
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  BUILD_TYPE: RelWithDebInfo
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    # Not consumed yet — walkrie_tests (the only target wired into ctest)
+    # runs against mocks, not a live DB. Kept here so the integration
+    # binaries (test_sink_batch_mode, test_lsn_confirm, ...) can be
+    # wired into this job later without touching the service config.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: walkrie_demo
+          POSTGRES_PASSWORD: changeme
+          POSTGRES_DB: walkrie_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            g++ \
+            pkg-config \
+            libpq-dev \
+            libevent-dev \
+            libcurl4-openssl-dev \
+            nlohmann-json3-dev \
+            libspdlog-dev \
+            libsqlite3-dev
+
+      - name: Configure
+        run: >
+          cmake -B ${{ github.workspace }}/build
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+          -DLLAMA_DIR=${{ github.workspace }}/third_party/llama.cpp
+          -DBUILD_SHARED_LIBS=OFF
+
+      - name: Build
+        run: cmake --build ${{ github.workspace }}/build --config ${{ env.BUILD_TYPE }} --parallel
+
+      - name: Test
+        working-directory: ${{ github.workspace }}/build
+        run: ctest --output-on-failure -C ${{ env.BUILD_TYPE }}
