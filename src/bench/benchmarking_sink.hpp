@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <chrono>
+#include <cstdint>
 #include "event_sink.hpp"
 #include "bench_stats.hpp"
 

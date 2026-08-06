@@ -1,5 +1,6 @@
 #include "gguf_metadata_reader.hpp"
 
+#include <cstdint>
 #include <memory>
 
 #include <gguf.h>

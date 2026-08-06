@@ -1,6 +1,7 @@
 #include "event_dispatcher.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <spdlog/spdlog.h>
 #include <sstream>

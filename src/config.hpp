@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include <stdexcept>
 #include <string>

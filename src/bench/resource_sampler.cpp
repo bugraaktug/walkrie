@@ -1,5 +1,6 @@
 // resource_sampler.cpp
 #include "resource_sampler.hpp"
+#include <cstdint>
 #include <fstream>
 #include <sstream>
 #include <sys/resource.h>

@@ -1,6 +1,7 @@
 #include "pgoutput_parser.hpp"
 #include "byte_utils.hpp"
 
+#include <cstdint>
 #include <cstring>
 #include <stdexcept>
 #include <spdlog/spdlog.h>

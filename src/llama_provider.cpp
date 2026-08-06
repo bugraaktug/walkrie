@@ -1,6 +1,7 @@
 #include "llama_provider.hpp"
 #include "config.hpp"
 
+#include <cstdint>
 #include <cstdio>
 #include <stdexcept>
 #include <algorithm>

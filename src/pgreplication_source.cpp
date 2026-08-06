@@ -4,6 +4,7 @@
 #include <sys/select.h>
 #include <event2/event.h>
 
+#include <cstdint>
 #include <cstdio>
 #include <spdlog/spdlog.h>
 #include <sstream>
