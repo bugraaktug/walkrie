@@ -246,6 +246,7 @@ batch_timeout_ms = 50
 * `batch_timeout_ms` (default `50`) — maximum time to wait for a batch to fill before processing whatever's been collected so far. Ensures a lone event during a quiet period still gets processed promptly rather than waiting indefinitely for more events that may never arrive.
 * `batch_size` also drives `EmbeddingConfig::max_batch_size` internally (`cfg.embedding.max_batch_size = cfg.settings.batch_size` in `config.hpp`'s `load_config()`) — there's no separate embedding-specific batch-size field to set. `OpenAIProvider` benefits from `batch_size > 1` with a genuine reduction in HTTP round-trips (measured ~7.3× lower per-row latency at `batch_size=10` — see PERFORMANCE.md §5). `LlamaProvider` now also does real batched computation (see Known Limitations above) — but measured, it's currently a ~20% per-row *slowdown* rather than a win, unlike OpenAI's result.
 * Batching groups events across **all** configured sinks in one dispatch cycle, not independently per sink — see the Isolation Layer note above if running `json-output` alongside `postgres-embedding`.
+* **`[app] batch_size` and `walkrie_worker --batch-size` are unrelated despite the name.** `[app] batch_size` only governs `EventDispatcher`'s grouping of *live* events — backfill never goes through `EventDispatcher` at all, it's driven entirely by `--batch-size` (see Initial Backfill Scan below).
 
 ### Multiple sources into one sink table (discriminator)
 
