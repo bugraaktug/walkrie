@@ -1,5 +1,5 @@
 Name:           walkrie
-Version:        1.2.0~alpha1
+Version:        1.2.1~alpha1
 Release:        1%{?dist}
 Summary:        PostgreSQL WAL to vector embedding sync engine
 

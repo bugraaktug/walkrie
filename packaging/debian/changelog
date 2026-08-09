@@ -1,3 +1,29 @@
+walkrie (1.2.1~alpha1-1) unstable; urgency=low
+
+  * Added RPM packaging (packaging/rpm/), mirroring the existing .deb
+    layout: same walkrie system user/group, /etc/walkrie,
+    /var/lib/walkrie/{models,backfill} paths, and systemd unit. See
+    packaging/rpm/walkrie.spec and TECHNICAL.md's "Installation (RPM
+    package)" section.
+  * LlamaProvider gained optional GPU offload via a new n_gpu_layers
+    config field (CUDA, requires -DGGML_CUDA=ON at build time); silently
+    falls back to CPU-only with a warning if the running build has no
+    GPU backend. See PERFORMANCE.md Section 5 for measured effect
+    (hardware-dependent, not a fixed win) and TECHNICAL.md's Known
+    Limitations.
+  * CMakeLists.txt's SQLite3 detection now checks the system version and
+    falls back to fetching/building the amalgamation from source when it
+    predates 3.35.0 (RETURNING clause support) instead of a hard
+    find_package(SQLite3 REQUIRED) that would fail outright on older
+    systems (e.g. RHEL/Rocky 9's stock sqlite-devel).
+  * test_sink_batch_mode's single-vs-batch embedding comparison now
+    gates on cosine distance instead of raw per-dimension max_abs_diff,
+    since the latter isn't equivalently strict across providers with
+    different output vector scales; max_abs_diff is still printed as
+    diagnostic context on a mismatch.
+
+ -- bugra <bugraaktug@gmail.com>  Sun, 09 Aug 2026 12:00:00 +0300
+
 walkrie (1.2.0~alpha1-1) unstable; urgency=low
 
   * LSN acknowledgment is now tied to durable sink writes, not to WAL

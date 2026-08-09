@@ -196,7 +196,7 @@ No pre-built `.rpm` is published yet — build one from `packaging/rpm/`:
 git submodule update --init --recursive   # if not already done
 ./packaging/rpm/make-tarball.sh
 rpmbuild --define "_topdir $HOME/rpmbuild" -ba packaging/rpm/walkrie.spec
-sudo dnf install $HOME/rpmbuild/RPMS/x86_64/walkrie-1.2.0~alpha1-1.*.rpm
+sudo dnf install $HOME/rpmbuild/RPMS/x86_64/walkrie-1.2.1~alpha1-1.*.rpm
 ```
 
 `make-tarball.sh` vendors `third_party/llama.cpp`'s submodule content directly into the source tarball rather than relying on `git submodule update` inside the build — `git archive` alone doesn't recurse into submodules, and `rpmbuild` environments (`mock`/`koji` particularly) commonly run with no network access.
