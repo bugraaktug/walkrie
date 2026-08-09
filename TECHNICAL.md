@@ -2,6 +2,33 @@
 
 This document describes the internal architecture of Walkrie's PostgreSQL-to-vector-database sync engine.
 
+## Contents
+
+- [Architectural Topology](#architectural-topology)
+- [Core Systems Design](#core-systems-design)
+  - [1. Ingestion Layer](#1-ingestion-layer-libevent)
+  - [2. Isolation Layer (Lock-Free SPSC Queue)](#2-isolation-layer-lock-free-spsc-queue)
+  - [3. Decode Layer](#3-decode-layer-pgoutput-parser)
+  - [4. Sink Layer](#4-sink-layer)
+  - [5. Initial Backfill Scan](#5-initial-backfill-scan)
+- [Known Limitations](#known-limitations)
+- [Prerequisites](#prerequisites)
+- [Compilation (from source)](#compilation-from-source)
+- [Installation (pre-built `.deb` package)](#installation-pre-built-deb-package)
+  - [Model Installation](#model-installation)
+- [Docker Build](#docker-build)
+- [Configuration Syntax](#configuration-syntax)
+  - Batching (`batch_size` / `batch_timeout_ms`)
+  - [Multiple sources into one sink table (discriminator)](#multiple-sources-into-one-sink-table-discriminator)
+  - [Multiple sink blocks](#multiple-sink-blocks)
+  - [OpenAI provider](#openai-provider)
+- [Execution](#execution)
+- [Testing](#testing)
+  - [Unit tests](#unit-tests-walkrie_tests-doctest-no-live-db-required)
+  - Integration tests (live Postgres + real embedding provider required)
+- [Vector Indexing (Operator Responsibility)](#vector-indexing-operator-responsibility)
+- [Performance](#performance)
+
 ## Architectural Topology
 
 ```
@@ -104,10 +131,10 @@ backfill    = true
 
 ## Known Limitations
 
-* **`LlamaProvider::embed_batch()` now does real multi-sequence embedding, but whether it's a throughput win is hardware-dependent, not fixed.** It raises `n_seq_max` in `llama_context_params` and packs each chunk of texts into one `llama_encode()` call as parallel sequences (`build_batch()` in `llama_provider.cpp`), so `batch_size > 1` now genuinely reduces the number of `llama_encode()` calls, not just DB-write grouping. Measured on a VM, it's ~20% *slower* per row than sequential `embed()` calls — the opposite of what batching does for `OpenAIProvider`. Re-measured on separate bare-metal hardware with the same model file and batch size, it's instead ~26% *faster*, and up to ~35% faster at a larger batch size (see PERFORMANCE.md §5 for both environments' full numbers). Working hypothesis for the reversal: two effects compete — (1) llama.cpp's non-causal encode computes a dense attention matrix over the *combined* ubatch, so attention cost scales with `(combined tokens)²` rather than `Σ(tokens per sequence)²`, a real cost on any hardware; (2) each `llama_encode()` call also pays a fixed per-call overhead (thread wake, allocation, bookkeeping) that's a larger fraction of total time on older/slower hardware, so batching's amortization of it can outweigh (1) there while leaving (1) dominant on newer/faster hardware. Not confirmed via profiling; flagged as a follow-up. **Practical takeaway: profile `batch_size` on your actual deployment hardware rather than assuming either direction** — this is a real, working milestone (multi-sequence Llama batching is implemented and correct, see below), but its performance effect doesn't generalize across machines. GPU offload (`n_gpu_layers`, see Configuration Syntax below) further shifts this in the batched case's favor on hardware that supports it, at the cost of sequential (`batch_size = 1`) calls getting slower — see PERFORMANCE.md §5.
-* **Batched and sequential calls do *not* produce bit-identical embeddings for the same input — confirmed, and quantization-dependent.** With `bge-m3-Q4_K_M.gguf`, `embed()` vs. `embed_batch()` output for the same text diverges well past a near-zero tolerance. With `bge-m3-Q8_0.gguf`, the two match within the integration test's epsilon. Likely explanation: `Q8_0` uses flat per-block int8 scaling close to the original F16 weights, so its own baseline quantization error is small; `Q4_K_M`'s k-quant format uses hierarchical per-sub-block scales at mixed low bit-width, carrying substantially more baseline quantization error. The floating-point summation/tiling order genuinely differs between a batched GEMM (`embed_batch()`) and an independent per-sequence GEMV (`embed()`) regardless of quantization (a well-documented phenomenon in comparable transformer implementations, see `integration_tests/README.md`'s cited references) — `Q8_0`'s small baseline error absorbs that perturbation without exceeding tolerance, `Q4_K_M`'s larger baseline error does not.
-  * **Practical takeaway**: use `Q8_0` (or a higher-precision quantization) rather than `Q4_K_M` if your deployment mixes `embed_batch()` and `embed()` calls (i.e. `batch_size > 1`) and embedding consistency across that boundary matters — e.g. the same row re-embedded via a different code path should land near-identical, not measurably different.
-  * **To reproduce this yourself**: run `test_sink_batch_mode` (see Testing below) once per model file and compare the cross-comparison epsilon result — `Q4_K_M` should fail a tight `--epsilon`, `Q8_0` should pass. A quick manual `embed()` vs. `embed_batch()` diff check (per-element max-abs-diff, first-N-values printout) is also kept, commented out, near the top of `main()` in `src/tests/integration/test_sink_batch_mode.cpp` if you want to inspect raw values against your own model rather than just a pass/fail.
+* **`LlamaProvider::embed_batch()` now does real multi-sequence embedding, but whether it's a throughput win is hardware-dependent, not fixed.** It raises `n_seq_max` in `llama_context_params` and packs each chunk of texts into one `llama_encode()` call as parallel sequences (`build_batch()` in `llama_provider.cpp`), so `batch_size > 1` now genuinely reduces the number of `llama_encode()` calls, not just DB-write grouping. Measured on a VM, it's ~20% *slower* per row than sequential `embed()` calls — the opposite of what batching does for `OpenAIProvider`. Re-measured on separate bare-metal hardware with the same model file and batch size, it's instead ~26% *faster*, and up to ~35% faster at a larger batch size (see PERFORMANCE.md §5 for both environments' full numbers; root cause not established). **Practical takeaway: profile `batch_size` on your actual deployment hardware rather than assuming either direction** — this is a real, working milestone (multi-sequence Llama batching is implemented and correct, see below), but its performance effect doesn't generalize across machines. GPU offload (`n_gpu_layers`, see Configuration Syntax below) further shifts this in the batched case's favor on hardware that supports it, at the cost of sequential (`batch_size = 1`) calls getting slower — see PERFORMANCE.md §5.
+* **Batched and sequential calls do *not* produce bit-identical embeddings for the same input — confirmed, and both quantization- and hardware/build-dependent.** With `bge-m3-Q4_K_M.gguf`, `embed()` vs. `embed_batch()` output for the same text diverges well past a near-zero tolerance, on every machine tested. With `bge-m3-Q8_0.gguf`, the picture is less clean-cut than it first looked: on a VirtualBox VM (PERFORMANCE.md's Environment 1), the two match within the integration test's default `1e-6` tolerance; on a bare-metal, native-CPU build (Environment 2, Rocky Linux 9), the **same model file** instead lands at cosine similarity ~0.9995-0.9997 (cosine distance ~0.0003-0.0005) — roughly two to three orders of magnitude past that tolerance. The embeddings are still ~99.95%+ similar (not a correctness break, just not bit-identical) — but "Q8_0 always passes at a tight tolerance" is not a fixed model property, only something that held on the one machine it was first measured on. Root cause not established.
+  * **Practical takeaway**: use `Q8_0` (or a higher-precision quantization) rather than `Q4_K_M` if your deployment mixes `embed_batch()` and `embed()` calls (i.e. `batch_size > 1`) and embedding consistency across that boundary matters — but don't assume a specific `--epsilon` value carries over from one machine to another even with the same model file; re-measure on your actual deployment hardware.
+  * **To reproduce this yourself**: run `test_sink_batch_mode` (see Testing below) once per model file and compare the cross-comparison result — `Q4_K_M` should fail a tight `--epsilon` on any hardware; `Q8_0` may or may not, depending on the machine. The comparison is gated on **cosine distance** (`1 - cosine_similarity`), not raw per-dimension `max_abs_diff` — deliberately: `max_abs_diff` bakes in whatever absolute scale a provider happens to return (`LlamaProvider` returns raw, unnormalized vectors with norm ~25 for this model; OpenAI's API returns unit-normalized vectors with norm ~1 by default), so the same numeric threshold isn't equivalently strict across providers. `max_abs_diff` is still printed on a failure as diagnostic context, it just doesn't decide pass/fail. A quick manual `embed()` vs. `embed_batch()` diff check (per-element max-abs-diff, first-N-values printout) is also kept, commented out, near the top of `main()` in `src/tests/integration/test_sink_batch_mode.cpp` if you want to inspect raw values against your own model directly.
 
 ## Prerequisites
 
@@ -411,7 +438,7 @@ Covers WAL frame parsing, `pgoutput` message decoding (including `Truncate` — 
 ./test_sink_batch_mode <config.toml> --conninfo "<pg conninfo>" [--epsilon 1e-6]
 ```
 
-See `src/tests/integration/README.md` for the full scenario list. `LlamaProvider` now does real batched computation, so the near-zero default `--epsilon` no longer holds universally — it holds for `Q8_0`-class quantizations (confirmed) but not for `Q4_K_M` (confirmed divergent) — see Known Limitations above before picking a model + epsilon combination for CI.
+See `src/tests/integration/README.md` for the full scenario list. `LlamaProvider` now does real batched computation, so the near-zero default `--epsilon` no longer holds universally — `Q4_K_M` confirmed divergent on every machine tested, `Q8_0` confirmed to pass on one machine and confirmed to fail on another with the same model file — see Known Limitations above before picking a model + epsilon combination for CI, and don't assume a value that worked on one deployment machine carries over to another.
 
 `test_sink_dims_check` verifies `PgEmbeddingSink::verify_sink_column_dimensions()` — the startup check described in the "Note on `dimensions`" above — across 4 cases: matching dims (no throw), mismatched dims (throws, naming both values), an unconstrained `vector` column with no declared dimension (skipped, no throw), and a missing sink column (throws). Needs a real `pg_attribute` lookup, so it's an integration test too, not a doctest case. Uses its own dedicated tables (`walkrie_it_dims_*`) and config (`config_sample_dims_check_test.toml`), independent of `test_sink_batch_mode`'s.
 

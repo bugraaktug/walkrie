@@ -4,6 +4,29 @@ This document tracks benchmark results for Walkrie's replication and sink pipeli
 
 All benchmarks were run locally, source and sink on the same machine (`localhost`), so lag figures are not affected by network latency or clock skew between hosts.
 
+## Contents
+
+- [Methodology](#methodology)
+- [Environment](#environment)
+- [Summary](#summary)
+- [1. Pipeline baseline](#1-pipeline-baseline-json-output-sink-discard-target)
+  - [Single-transaction load](#single-transaction-load-1000000-rows-one-commit)
+  - [Batched load](#batched-load-1000000-rows-1000-transactions-of-1000-rows-each)
+- [2. Embedding provider latency](#2-embedding-provider-latency-isolated-embedding_bench)
+  - [Local Llama (BGE-M3, Q4_K_M)](#local-llama-bge-m3-q4_k_m)
+  - [OpenAI (text-embedding-3-small)](#openai-text-embedding-3-small)
+- [3. End-to-end pipeline (local Llama provider)](#3-end-to-end-pipeline-postgres-embedding-sink-local-llama-provider)
+  - Real Llama batching enabled (`batch_size = 8`, Q8_0)
+- [4. End-to-end pipeline (OpenAI provider)](#4-end-to-end-pipeline-postgres-embedding-sink-openai-provider)
+- [5. Batched vs. sequential embedding calls](#5-batched-vs-sequential-embedding-calls)
+  - [OpenAI](#openai-text-embedding-3-small-embedding_batch_bench)
+  - Local Llama — hardware-dependent effect
+  - [GPU offload (Environment 2)](#gpu-offload-environment-2)
+- [6. Backfill drain: worker/thread-count scaling](#6-backfill-drain-worker-count-and-thread-count-scaling-embed_backfill_batched_bench)
+  - Default config (`n_threads = 4`)
+  - Tuned config (`n_threads = 2`, `--workers 2`)
+- [7. Backfill: real end-to-end (OpenAI)](#7-backfill-real-end-to-end-openai-backfill_bench)
+
 ## Methodology
 
 * **`walkrie_bench`** wraps the configured sink in a lag-recording decorator and samples process CPU time (`getrusage`) and RSS (`/proc/self/status`) every 200ms on a background thread, independent of the pipeline's own threads.
@@ -184,11 +207,7 @@ Batching costs **~20% more** per row here.
 | Q4_K_M | 8 | 92.71 ms | 74.88 ms | -19.2% (helps) |
 | Q4_K_M | 10 | 93.96 ms | 61.28 ms | **-34.8% (helps)** |
 
-Same model file, same quantization, same batch size (Q8_0 @ 10) — **+19.9% on Environment 1 vs. -25.6% on Environment 2.** Both machines show the same shape (batching flat-to-negative below batch_size≈8, clearly positive at 8–10) but land on opposite conclusions about whether to enable it.
-
-**Working hypothesis, not confirmed by profiling** — two effects likely both contribute:
-1. A non-causal encode computes dense attention over the whole combined ubatch (cross-sequence entries masked to zero *after* the matmul, not skipped), so attention cost scales with `(combined tokens)²` rather than `Σ(tokens per sequence)²` — a real cost on any hardware.
-2. Each `llama_encode()` call also pays a fixed per-call overhead (thread wake, allocation, bookkeeping) independent of token count. On older/slower hardware that fixed cost is a larger share of total call time, so batching's amortization of it outweighs the attention penalty above; on newer/faster hardware there's less fixed cost to amortize, leaving the attention penalty as the dominant, uncompensated effect.
+Same model file, same quantization, same batch size (Q8_0 @ 10) — **+19.9% on Environment 1 vs. -25.6% on Environment 2.** Both machines show the same shape (batching flat-to-negative below batch_size≈8, clearly positive at 8–10) but land on opposite conclusions about whether to enable it. Root cause not established — treat as an observed hardware effect, not something to design around based on an assumed mechanism.
 
 **Practical takeaway: profile `batch_size` on the actual target deployment hardware rather than assuming either result above** — a batching decision tuned on one machine does not transfer to another. Reproduce with `./embedding_bench_batch <config.toml> --rounds 50 --batch-size N` per quantization; use 50+ rounds — 10–20 rounds showed too much run-to-run spread to be reliable.
 
@@ -204,7 +223,7 @@ Environment 2 also has a CUDA-capable GPU (NVIDIA GeForce GTX 745, 2 GiB VRAM, n
 | Q8_0 | 0 (CPU) | 87.20 ms | 64.88 ms |
 | Q8_0 | 16 | 140.21 ms | **46.31 ms** |
 
-**Batched calls keep improving with more offload** (down to -29% vs. the CPU-only batched number); **sequential calls keep getting worse** (up to +73%), in both quantizations. Likely cause: each `llama_encode()` call touching GPU-resident layers pays a fixed PCIe host↔device transfer cost. A batched call spreads that cost across 10 sequences in one call; a sequential call pays it 10 separate times for one sequence each, so more offloaded layers add transfer overhead with no batch to amortize it against. Not confirmed via profiling.
+**Batched calls keep improving with more offload** (down to -29% vs. the CPU-only batched number); **sequential calls keep getting worse** (up to +73%), in both quantizations. Root cause not established.
 
 **Practical takeaway: only enable GPU offload on hardware like this if the deployment actually uses `embed_batch()` with a meaningful batch size** (`[app] batch_size > 1`) — offloading for a `batch_size=1` deployment makes it slower, not faster. Reproduce with `./embedding_bench_batch <config.toml> --rounds 50 --batch-size 10` after setting `n_gpu_layers`, and confirm engagement with `nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv -l 1` running alongside it — a misconfigured build can silently fall back to CPU with no error at any layer count.
 

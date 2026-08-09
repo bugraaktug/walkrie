@@ -80,34 +80,60 @@ integration test that truncates tables between runs.
 Exit code is `0` if all scenarios pass, `1` otherwise — safe to wire into
 a CI step or pre-merge check.
 
-## Important: the equality tolerance is now quantization-dependent
+## Important: the equality tolerance is quantization- AND hardware-dependent
 
-`LlamaProvider::embed_batch()` now has a real override — a multi-sequence
+`LlamaProvider::embed_batch()` has a real override — a multi-sequence
 `llama_encode()` (via `n_seq_max`), not the default per-`embed()` loop.
 As predicted below, batched and sequential calls are **not** guaranteed
 to produce bit-identical output, and this has now been confirmed
-empirically, with a twist: how far apart they land depends on the
-model's quantization.
+empirically on two different machines, with a twist: how far apart they
+land depends on both the model's quantization and the specific
+hardware/build running it — not quantization alone.
+
+The comparison itself is gated on **cosine distance** (`1 - cosine_similarity`
+between the single-path and batch-path embedding for the same row), not raw
+per-dimension `max_abs_diff` — `--epsilon` is the max acceptable cosine
+distance. This is deliberate: raw abs-diff bakes in whatever absolute scale
+a provider happens to return — `LlamaProvider` returns raw, unnormalized
+vectors (norm ~25 for the model used here); OpenAI's API returns
+unit-normalized vectors (norm ~1) by default — so the same numeric
+threshold isn't equivalently strict across providers. `max_abs_diff` is
+still printed on a failure as diagnostic context, it just doesn't decide
+pass/fail.
 
 - **`bge-m3-Q4_K_M.gguf`** — `embed()` vs. `embed_batch()` diverge well
-  past the default near-zero `--epsilon 1e-6`. A test run against this
-  model at a tight epsilon will (correctly) fail the cross-comparison
-  check.
-- **`bge-m3-Q8_0.gguf`** — the two match within the default `--epsilon
-  1e-6`. This is the quantization used for the Llama numbers in
-  PERFORMANCE.md's batching section for that reason.
+  past the default near-zero `--epsilon 1e-6` (cosine distance), on every
+  machine tested so far. A test run against this model at a tight epsilon
+  will (correctly) fail the cross-comparison check.
+- **`bge-m3-Q8_0.gguf`** — machine-dependent, confirmed both ways:
+  - On a VirtualBox VM (PERFORMANCE.md's Environment 1), the two match
+    within the default `--epsilon 1e-6`. This is the machine/quantization
+    combination used for the Llama numbers in PERFORMANCE.md's batching
+    section for that reason.
+  - On bare-metal, native-CPU-build hardware (Environment 2, Rocky Linux
+    9), the **same model file** instead lands at cosine similarity
+    ~0.9995-0.9997 (cosine distance ~0.0003-0.0005) for several rows in
+    the `mixed_realistic_5insert_1delete_4update` scenario — roughly two
+    to three orders of magnitude past `1e-6`. The vectors remain ~99.95%+
+    similar, so this is not a correctness break, just proof that "Q8_0
+    always passes at a tight epsilon" was a property of the first machine
+    it was measured on, not of the quantization itself.
 
-See TECHNICAL.md's Known Limitations for the likely explanation (`Q8_0`'s
-flat per-block int8 scaling carries much less baseline quantization error
-than `Q4_K_M`'s hierarchical k-quant scaling, so it absorbs the
-batched-vs-sequential floating-point summation-order difference without
-exceeding tolerance). Practically: pick `--epsilon` per model rather than
-assuming one tolerance covers every quantization —
+Root cause for why this is machine-dependent isn't established (see
+TECHNICAL.md's Known Limitations) — treat it as an observed effect to
+plan around, not a mechanism to design against. Practically: pick
+`--epsilon` for the machine you're actually testing on (e.g.
+`--epsilon 0.001` comfortably clears the Environment 2 drift above), and
+when a row fails, look at the reported `cosine_similarity` — near `1.0`
+is this floating-point-drift effect, not a regression; a genuinely low
+`cosine_similarity` (or a row-count/item_body/spot-check failure) would
+indicate something actually wrong.
 
 - This is worth treating as a deliberate, documented tolerance choice per
-  model — not a silent "loosen it until the test passes" fix, since a
-  tolerance that's too loose would stop catching a genuine correctness
-  regression.
+  model *and* per deployment machine — not a silent "loosen it until the
+  test passes" fix, since a tolerance that's too loose would stop
+  catching a genuine correctness regression. Re-measure rather than
+  reusing a number from a different machine.
 
 The same caveat does **not** apply to `OpenAIProvider`, which already has
 a real batched `embed_batch()` today (one HTTP call with an array of
@@ -145,14 +171,15 @@ for `llama.cpp`/`ggml`'s embedding batching.** The underlying mechanism
 (floating-point non-associativity in batched GEMM vs. sequential GEMV) is
 architecture-agnostic and would be expected to apply to ggml's kernels the
 same way it applies to CLIP's or any other transformer implementation —
-but that is inference from a general hardware/numerics principle, not a
-citation from the llama.cpp project itself. Treat the `LlamaProvider`
-epsilon-loosening guidance above as a reasonable precaution grounded in
-that general principle, not as something llama.cpp's own documentation
-warns about — worth re-verifying empirically (run this test with real
-batched `llama_encode()` output and measure the actual drift) once that
-implementation exists, rather than assuming a specific tolerance value in
-advance.
+that inference from a general hardware/numerics principle is now backed
+by this project's own empirical data above (real batched `llama_encode()`
+output, measured drift confirmed on two separate machines with the same
+model file), not just a citation from elsewhere. Treat the `LlamaProvider`
+epsilon-loosening guidance above as measured behavior of this project's
+own batching implementation, not merely an inferred precaution — still
+worth re-verifying on any new deployment hardware before trusting a
+specific tolerance value, since the two machines measured so far already
+disagree with each other.
 
 ## Sink Dimension-Check Integration Test (`test_sink_dims_check`)
 

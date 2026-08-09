@@ -13,23 +13,50 @@
 // (test_event_dispatcher_batching.cpp).
 //
 // IMPORTANT — read before extending this test:
-// As of this writing, LlamaProvider has no real embed_batch() override —
-// it inherits EmbeddingProvider's default, which loops calling embed()
-// on each text individually. That means today's "batched" path and
-// "single" path both end up calling embed() the same way, one text at a
-// time — so their resulting embeddings are expected to be BIT-IDENTICAL,
-// and this test uses strict/near-zero epsilon comparison accordingly.
+// LlamaProvider has a real embed_batch() override (multi-sequence
+// llama_encode() via n_seq_max) — the "batched" and "single" paths do
+// genuinely different compute (batched GEMM vs. per-row GEMV), so their
+// resulting embeddings are NOT guaranteed to be bit-identical: floating-
+// point summation order differs between the two, an expected property of
+// batched matmul, not a bug.
 //
-// Once LlamaProvider gets a real embed_batch() (multi-sequence
-// llama_encode() via n_seq_max), that assumption breaks: genuine batched
-// computation is not guaranteed to produce bit-identical floating-point
-// results to sequential per-row calls (different summation order inside
-// a batched matmul). At that point, --epsilon needs to be loosened to a
-// tolerance appropriate for floating-point drift (e.g. cosine similarity
-// > 0.999999, or a small max-abs-diff threshold) rather than near-zero.
+// The embedding comparison is gated on COSINE DISTANCE (1 - cosine
+// similarity), not raw per-dimension max_abs_diff — deliberately. Raw
+// abs-diff bakes in whatever absolute scale a given provider happens to
+// return: LlamaProvider returns raw, unnormalized vectors (norm ~25 for
+// the model this test was developed against); OpenAI's API returns
+// unit-normalized vectors (norm ~1) by default. The same numeric
+// --epsilon is nowhere near equivalently strict against those two scales.
+// Cosine distance is scale-invariant, so one --epsilon value means the
+// same thing regardless of provider, quantization, or hardware.
+// max_abs_diff is still computed and printed on a failure, purely as
+// diagnostic context (e.g. to sanity-check the embedding's scale) — it
+// does not gate pass/fail.
+//
+// The default --epsilon (1e-6, i.e. "must be near-bit-identical") only
+// holds on some model/hardware/build combinations, not universally.
+// Confirmed so far: passes at 1e-6 for bge-m3-Q8_0.gguf on one machine
+// (a VirtualBox VM — see PERFORMANCE.md's Environment 1), fails at 1e-6
+// for the SAME model file on a different machine (bare-metal, native-CPU
+// build — PERFORMANCE.md's Environment 2), where cosine_similarity was
+// ~0.9995-0.9997 (cosine distance ~0.0003-0.0005) — the embeddings are
+// still ~99.95%+ similar, just not within a bit-identical tolerance.
+// Root cause not established — how far apart batched vs. sequential land
+// is hardware/build-dependent even though the fact that they differ at
+// all is universal. See TECHNICAL.md's Known Limitations for the full
+// writeup.
+//
+// Practical implication: pick --epsilon for the hardware you're actually
+// running on rather than assuming 1e-6 is portable (e.g. --epsilon 0.001
+// comfortably clears the drift measured above). A genuine bug looks
+// different from this floating-point-drift effect: a LOW
+// cosine_similarity (rows semantically diverging), a row count mismatch,
+// an item_body mismatch, or an expect_present/expect_absent spot-check
+// failure.
 //
 // usage:
 //   ./test_sink_batch_mode <config.toml> --conninfo "<pg conninfo>" [--epsilon 1e-6]
+//   (--epsilon is a max acceptable cosine DISTANCE: 1 - cosine_similarity)
 //
 // example:
 //   ./test_sink_batch_mode ../config_samples/config_sample.toml --conninfo "host=localhost port=5432 dbname=walkrie_test user=walkrie_demo password=changeme"
@@ -288,7 +315,7 @@ std::map<std::string, FetchedRow> fetch_table(PGconn* pg, const std::string& tab
     return rows;
 }
 
-double max_abs_diff(const std::vector<float>& a, const std::vector<float>& b) 
+double max_abs_diff(const std::vector<float>& a, const std::vector<float>& b)
 {
     if (a.size() != b.size()) return std::numeric_limits<double>::infinity();
     double max_diff = 0.0;
@@ -296,6 +323,25 @@ double max_abs_diff(const std::vector<float>& a, const std::vector<float>& b)
         max_diff = std::max(max_diff, static_cast<double>(std::fabs(a[i] - b[i])));
     }
     return max_diff;
+}
+
+// Reported alongside max_abs_diff on a mismatch so a raw per-dimension
+// diff can be judged in context: these embeddings are raw/unnormalized
+// (see LlamaProvider::extract_embeddings), so their component magnitude
+// varies by model — a max_abs_diff that looks large in isolation can
+// still mean the two vectors are ~99%+ similar. See the file header
+// comment above for how to read this.
+double cosine_similarity(const std::vector<float>& a, const std::vector<float>& b)
+{
+    if (a.size() != b.size() || a.empty()) return std::numeric_limits<double>::quiet_NaN();
+    double dot = 0.0, norm_a = 0.0, norm_b = 0.0;
+    for (size_t i = 0; i < a.size(); ++i) {
+        dot    += static_cast<double>(a[i]) * static_cast<double>(b[i]);
+        norm_a += static_cast<double>(a[i]) * static_cast<double>(a[i]);
+        norm_b += static_cast<double>(b[i]) * static_cast<double>(b[i]);
+    }
+    if (norm_a == 0.0 || norm_b == 0.0) return std::numeric_limits<double>::quiet_NaN();
+    return dot / (std::sqrt(norm_a) * std::sqrt(norm_b));
 }
 
 // ---------------------------------------------------------------------
@@ -329,7 +375,9 @@ std::unique_ptr<pgcdc::PgEmbeddingSink> make_sink(const std::string& conninfo,
 int main(int argc, char** argv) 
 {
     if (argc < 2) {
-        std::cerr << "usage: " << argv[0] << " <config.toml> --conninfo \"<pg conninfo>\" [--epsilon 1e-6]\n";
+        std::cerr << "usage: " << argv[0] << " <config.toml> --conninfo \"<pg conninfo>\" [--epsilon 1e-6]\n"
+                   << "  --epsilon: max acceptable cosine distance (1 - cosine_similarity) between\n"
+                   << "             the single-path and batch-path embedding for the same row.\n";
         return 1;
     }
 
@@ -475,10 +523,17 @@ print_head("b2.at(1)", b2.at(1));
                 scenario_ok = false;
             }
 
-            double diff = max_abs_diff(single_row.embedding, batch_row.embedding);
-            if (diff > epsilon) {
-                failures.push_back("id=" + id + " embedding mismatch: max_abs_diff=" +
-                                   std::to_string(diff) + " (epsilon=" + std::to_string(epsilon) + ")");
+            double cos_sim = cosine_similarity(single_row.embedding, batch_row.embedding);
+            // NaN (size mismatch or a zero vector) can never satisfy a distance
+            // check — treat it as maximally divergent rather than silently
+            // passing through a false comparison.
+            double cos_dist = std::isnan(cos_sim) ? std::numeric_limits<double>::infinity() : (1.0 - cos_sim);
+            if (cos_dist > epsilon) {
+                double diff = max_abs_diff(single_row.embedding, batch_row.embedding);
+                failures.push_back("id=" + id + " embedding mismatch: cosine_distance=" +
+                                   std::to_string(cos_dist) + " (epsilon=" + std::to_string(epsilon) +
+                                   ") cosine_similarity=" + std::to_string(cos_sim) +
+                                   " max_abs_diff=" + std::to_string(diff) + " (diagnostic only)");
                 scenario_ok = false;
             }
         }
