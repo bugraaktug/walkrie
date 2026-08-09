@@ -168,7 +168,7 @@ For GPU offload with the local Llama provider, add `-DGGML_CUDA=ON` to the `cmak
 ## Installation (pre-built `.deb` package)
 
 ```bash
-sudo dpkg -i walkrie_1.2.0~alpha1-1_amd64.deb
+sudo dpkg -i walkrie_1.2.1~alpha2-1_amd64.deb
 sudo apt install -f
 ```
 

@@ -5,7 +5,7 @@
 # image, then copy just the binary into a minimal runtime image.
 #
 # Build:
-#   docker build -t walkrie:1.2.0-alpha1 .
+#   docker build -t walkrie:1.2.1-alpha2 .
 #
 # third_party/llama.cpp must already be checked out (a plain `git clone`
 # without --recurse-submodules leaves it empty — see TECHNICAL.md's
@@ -51,7 +51,7 @@ FROM debian:12-slim AS runtime
 LABEL org.opencontainers.image.title="walkrie" \
       org.opencontainers.image.description="PostgreSQL WAL to vector embedding sync engine" \
       org.opencontainers.image.source="https://github.com/bugraaktug/walkrie" \
-      org.opencontainers.image.version="1.2.0-alpha1"
+      org.opencontainers.image.version="1.2.1-alpha2"
 
 # Runtime shared libs only — llama.cpp/ggml are statically linked in
 # (BUILD_SHARED_LIBS=OFF above), same as the .deb package's Depends, plus

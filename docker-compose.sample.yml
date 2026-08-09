@@ -10,7 +10,7 @@
 services:
   walkrie:
     build: .
-    image: walkrie:1.2.0-alpha1
+    image: walkrie:1.2.1-alpha2
     restart: on-failure
     volumes:
       - ./config.toml:/etc/walkrie/config.toml:ro

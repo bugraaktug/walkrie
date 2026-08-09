@@ -49,7 +49,7 @@ Like any logical-replication consumer (Debezium included), Walkrie's replication
 Walkrie ships as a `.deb` package. After installing:
 
 ```bash
-sudo dpkg -i walkrie_1.2.0~alpha1-1_amd64.deb
+sudo dpkg -i walkrie_1.2.1~alpha2-1_amd64.deb
 sudo apt install -f   # resolve any missing runtime dependencies
 ```
 
@@ -95,7 +95,7 @@ Post-install steps (model placement, config editing, service start) are the same
 
 ```bash
 git submodule update --init --recursive   # if not already done
-docker build -t walkrie:1.2.0-alpha1 .
+docker build -t walkrie:1.2.1-alpha2 .
 ```
 
 No config is baked into the image — `config_sample.toml`'s placeholder credentials and `host = "localhost"` mean something different inside a container, so walkrie refuses to start with the same clear config-validation error described above until you bind-mount your own:
@@ -105,7 +105,7 @@ docker run --rm \
     -v "$(pwd)/config.toml:/etc/walkrie/config.toml:ro" \
     -v "$(pwd)/models:/var/lib/walkrie/models:ro" \
     -v "$(pwd)/logs:/var/log/walkrie" \
-    walkrie:1.2.0-alpha1
+    walkrie:1.2.1-alpha2
 ```
 
 * If your Postgres source/sink runs on the Docker host rather than in the same container network, point `config.toml`'s `host` at `host.docker.internal` (works out of the box with Docker Desktop on Mac/Windows) rather than `localhost`.
