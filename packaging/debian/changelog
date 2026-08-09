@@ -1,4 +1,4 @@
-walkrie (1.2.1~alpha1-1) unstable; urgency=low
+walkrie (1.2.1~alpha2-1) unstable; urgency=low
 
   * Added RPM packaging (packaging/rpm/), mirroring the existing .deb
     layout: same walkrie system user/group, /etc/walkrie,

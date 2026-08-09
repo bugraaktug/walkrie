@@ -1,4 +1,4 @@
-* Sun Aug 09 2026 bugra <bugraaktug@gmail.com> - 1.2.1~alpha1-1
+* Sun Aug 09 2026 bugra <bugraaktug@gmail.com> - 1.2.1~alpha2-1
 - Added RPM packaging (packaging/rpm/), mirroring packaging/debian/*: same
   walkrie system user/group, /etc/walkrie, /var/lib/walkrie/{models,backfill}
   layout, and systemd unit.
