@@ -42,9 +42,10 @@ embed_column 	= "embedding"
 
 [embedding]
 provider   = "llama"
-#model_path = "/home/debian/models/bge-m3/bge-m3-Q4_K_M.gguf"
-model_path = "/home/debian/models/bge-m3/bge-m3-Q8_0.gguf"
+#model_path = "/home/bugra/models/bge-m3/bge-m3-Q4_K_M.gguf"
+model_path = "/home/bugra/models/bge-m3/bge-m3-Q8_0.gguf"
 api_key    = ""
 dimensions = 1024
 n_threads  = 4
 n_ctx      = 512
+n_gpu_layers = 0

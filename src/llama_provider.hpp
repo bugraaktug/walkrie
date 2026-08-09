@@ -58,6 +58,7 @@ private:
     int         n_threads_;
     int         n_ctx_;
     int         n_batch_;
+    int         n_gpu_layers_;
 
     llama_model*   model_ = nullptr;
     llama_context* ctx_   = nullptr;

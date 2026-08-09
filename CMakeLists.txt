@@ -28,8 +28,45 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(PkgConfig REQUIRED)
 find_package(CURL REQUIRED)
-find_package(SQLite3 REQUIRED)
 pkg_check_modules(LIBEVENT REQUIRED libevent)
+
+set(WALKRIE_SQLITE_MIN_VERSION "3.35.0")
+pkg_check_modules(SYSTEM_SQLITE3 QUIET sqlite3)
+# SQLite3: use system copy if it's new enough (>=3.35.0, for the
+# RETURNING clause BackfillStore::claim_pending relies on for atomic
+# claim-without-race)
+if(SYSTEM_SQLITE3_FOUND AND SYSTEM_SQLITE3_VERSION VERSION_GREATER_EQUAL WALKRIE_SQLITE_MIN_VERSION)
+    message(STATUS "Using system SQLite3 (${SYSTEM_SQLITE3_VERSION})")
+    add_library(SQLite::SQLite3 INTERFACE IMPORTED)
+    set_target_properties(SQLite::SQLite3 PROPERTIES
+           INTERFACE_INCLUDE_DIRECTORIES "${SYSTEM_SQLITE3_INCLUDE_DIRS}"
+           INTERFACE_LINK_LIBRARIES "${SYSTEM_SQLITE3_LIBRARIES}")
+else()
+    if(SYSTEM_SQLITE3_FOUND)
+        message(STATUS "System SQLite3 (${SYSTEM_SQLITE3_VERSION}) predates ${WALKRIE_SQLITE_MIN_VERSION} (no RETURNING support) — fetching amalgamation")
+    else()
+        message(STATUS "System SQLite3 not found — fetching amalgamation")
+    endif()
+
+    enable_language(C)
+    include(FetchContent)
+    FetchContent_Declare(sqlite3_amalgamation
+        URL https://www.sqlite.org/2025/sqlite-autoconf-3480000.tar.gz
+    )
+    FetchContent_MakeAvailable(sqlite3_amalgamation)
+
+    add_library(sqlite3_vendored STATIC
+        ${sqlite3_amalgamation_SOURCE_DIR}/sqlite3.c
+    )
+    target_include_directories(sqlite3_vendored PUBLIC
+        ${sqlite3_amalgamation_SOURCE_DIR}
+    )
+    target_compile_definitions(sqlite3_vendored PRIVATE SQLITE_THREADSAFE=1)
+    set_target_properties(sqlite3_vendored PROPERTIES LINKER_LANGUAGE C)
+
+    add_library(SQLite::SQLite3 ALIAS sqlite3_vendored)
+    message(STATUS "Vendored SQLite3 amalgamation ready (built from source, RETURNING supported)")
+endif()
 
 
 # llama.cpp — built as part of this project via add_subdirectory.
@@ -103,7 +140,7 @@ target_link_libraries(walkrie_core PUBLIC
 add_executable(walkrie src/main.cpp)
 target_link_libraries(walkrie PRIVATE walkrie_core)
 
-# --- backfill drain worker (one process per source with pending backfill work, see slice 5) ---
+# --- backfill drain worker ---
 add_executable(walkrie_worker src/walkrie_worker_main.cpp)
 target_link_libraries(walkrie_worker PRIVATE walkrie_core)
 

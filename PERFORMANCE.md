@@ -32,9 +32,10 @@ All benchmarks in this document were run inside a VirtualBox VM (host: Windows, 
 * **Embedding latency dominates end-to-end cost.** Local Llama (BGE-M3, Q4_K_M, AVX2-enabled) averages 63.32 ms/call; OpenAI's `text-embedding-3-small` averages 306.66 ms/call — ~4.8× slower, plus network dependency and per-call cost (Section 2).
 * **End-to-end steady-state throughput is ~7–10 events/sec** with the local Llama provider, serial embed + pgvector upsert on a single dispatcher thread (Section 3) — the number to use for local-model deployment sizing on comparable hardware.
 * **CPU feature exposure is a critical, easy-to-miss deployment variable.** A VM with AVX2 not passed through measured 32× slower local-embedding latency with no error message — check `grep avx2 /proc/cpuinfo` before concluding the model itself is slow (Section 2).
-* **Batching helps OpenAI (~7.3× lower per-row latency at batch size 10), but currently hurts local Llama (~20% higher)** — batching collapses N HTTP round-trips into one for OpenAI, but for llama.cpp's non-causal encode, dense attention over the combined ubatch scales worse than the GEMM efficiency gained (Section 5, working hypothesis, not yet profiled).
+* **Batching helps OpenAI (~7.3× lower per-row latency at batch size 10); its effect on local Llama is hardware-dependent, not fixed.** On Environment 1 (VM, older test), batching cost ~20% more per row. Re-measured on Environment 2 (bare-metal, GPU-capable), batching *helps* — up to ~35% lower per row at `batch_size=10` — and enabling GPU offload widens that further, to ~29% lower than the CPU-only batched number (Section 5, 5b, 5c). Profile on your actual target hardware rather than assuming either direction.
 * **Backfill worker count must be sized against `n_threads`, not set independently** (Section 6). At the shipped default (`n_threads=4`), 2+ `walkrie_worker` processes oversubscribe this 8-vCPU VM and throughput *drops* below single-worker. `n_threads=2` + `--workers 2` (within budget) turned multi-worker drain into a real net speedup. Rule of thumb: `--workers ≈ nproc / n_threads`.
 * **OpenAI-backed backfill is cheap and scales predictably** (Section 7): a real 10,000-row backfill (dump + drain) completed in ~4.25 min for ~$0.005, with drain throughput essentially flat between 1k and 10k rows — a network-bound backfill doesn't inherit the local-CPU variance the Llama path does, so a small bench run is a trustworthy predictor of larger-scale OpenAI throughput here.
+* **The machine's own resources — CPU generation, virtualization, and GPU availability — matter more than any single config knob for local-Llama performance** (Sections 5b, 5c). The same model file and batch size flip from "batching hurts" to "batching helps" between two machines, and GPU offload on a modest, entry-level card pushes batched throughput further while making sequential (`batch_size=1`) calls slower — so a config recommendation tuned on one box does not transfer to another without re-measuring there.
 
 ## 1. Pipeline baseline (json-output sink, `discard` target)
 
@@ -145,35 +146,67 @@ The two batched-load columns are backlog-bound the same way as above (200÷8.6=2
 
 Not run as a separate end-to-end benchmark — Section 2 already isolates the per-call latency difference between providers (Llama avg 63.32 ms vs. OpenAI avg 306.66 ms), the dominant variable between an OpenAI- and Llama-backed run; pgvector upsert cost (Section 3, ~4–8 ms/row) and pipeline overhead (Section 1) are provider-independent. Left as a future addition if OpenAI-specific network variance becomes worth answering directly.
 
-## 5. Batched vs. sequential embedding calls (OpenAI, `embedding_batch_bench`)
+## 5. Batched vs. sequential embedding calls
 
-Purpose: isolate the effect of batching multiple texts into one `embed_batch()` call (one HTTP round-trip) vs. calling `embed()` sequentially N times (N round-trips).
+Purpose: isolate the effect of batching multiple texts into one `embed_batch()` call vs. calling `embed()` sequentially N times.
 
-**Config**: `provider = "openai"`, `model = "text-embedding-3-small"`, batch size 10, 20 rounds per method.
+### OpenAI (`text-embedding-3-small`, `embedding_batch_bench`)
+
+**Config**: batch size 10, 20 rounds per method.
 
 | Metric | Sequential (10× `embed()`) | Batched (1× `embed_batch()`) |
 |---|---|---|
 | Avg total/round | 1,983.14 ms | 271.33 ms |
 | **Avg per-row** | **198.31 ms** | **27.13 ms** |
 
-**~7.3× reduction in per-row latency.** Expected for a network-bound provider: N sequential HTTP round-trips each pay connection/queueing/network overhead independently, while one batched request pays it once. One data point (batch size 10), not necessarily optimal — a sweep across 5/10/20/50 would complete the picture, flagged as a follow-up.
+**~7.3× reduction in per-row latency.** Expected for a network-bound provider: N sequential HTTP round-trips each pay connection/queueing/network overhead independently, while one batched request pays it once. One data point (batch size 10); a sweep across 5/10/20/50 would complete the picture.
 
-### Local Llama (BGE-M3, Q8_0, `embedding_bench_batch`)
+### Local Llama — the effect is hardware-dependent, not fixed
 
-Purpose: the same measurement for `LlamaProvider::embed_batch()`, now that it does genuine multi-sequence computation rather than a per-`embed()` loop.
+`LlamaProvider::embed_batch()` packs a chunk of texts into one `llama_encode()` call as parallel sequences instead of looping over `embed()`. Measured on two different machines, the effect on per-row latency goes in opposite directions.
 
-**Config**: `provider = "llama"`, `model_path = ".../bge-m3-Q8_0.gguf"`, `dimensions = 1024`, `n_threads = 4`, `n_ctx = 512` (reports `n_ctx=2560 n_batch=10240 n_ubatch=10240 n_seq_max=10` once sized for 10 parallel sequences), batch size 10, 20 rounds.
+**Environment 1** (VirtualBox VM, Intel Core Ultra 7 155H — see Environment section above), BGE-M3 Q8_0, batch_size=10, `n_ctx=2560 n_batch=10240 n_ubatch=10240 n_seq_max=10`:
 
-| Metric | Sequential (10× `embed()`) | Batched (1× `embed_batch()`) |
+| Metric | Sequential | Batched |
 |---|---|---|
-| Avg total/round | 502.29 ms | 602.37 ms |
-| **Avg per-row** | **50.23 ms** | **60.24 ms** |
+| Avg per-row | 50.23 ms | 60.24 ms |
 
-**~20% *higher* per-row latency when batched** — the opposite of the OpenAI result, and the opposite of the original theory that batching would help by shifting per-row GEMV into one larger GEMM.
+Batching costs **~20% more** per row here.
 
-**Working hypothesis (not yet confirmed by profiling):** `embed_batch()` packs all sequences in a chunk into one `llama_encode()` call as parallel sequences sharing one ubatch. For a non-causal (embedding) model, attention is a dense QK^T over the whole ubatch — cross-sequence entries are masked to zero *after* the matmul, not skipped — so attention compute scales with `(combined tokens)²` rather than `Σ(tokens per sequence)²`. Batching N short sequences multiplies attention cost roughly by N, while the GEMM efficiency gained in the QKV/FFN projections is a smaller effect at this model size and sequence length, netting a loss. Worth confirming via profiling (time in the attention sub-graph, or whether slowdown scales with batch size as predicted) before treating as settled.
+**Environment 2** (bare-metal Rocky Linux 9, Intel Core i7-4790 "Haswell" 3.60GHz, 4 cores/8 threads, 7.4 GiB RAM, `-march=native` build, CPU-only for this comparison), 50 rounds per config:
 
-**Caveats**: measured on one resource-constrained VM against a `llama.cpp` checkout still under active upstream development — treat as one data point on this hardware/version, not a final verdict.
+| Quantization | batch_size | Sequential avg/row | Batched avg/row | Effect |
+|---|---|---|---|---|
+| Q8_0 | 4 | 84.91 ms | 110.49 ms | +30.2% (hurts) |
+| Q8_0 | 8 | 85.16 ms | 80.11 ms | -5.9% (flat) |
+| Q8_0 | 10 | 87.20 ms | 64.88 ms | **-25.6% (helps)** |
+| Q4_K_M | 4 | 95.10 ms | 97.49 ms | +2.5% (flat) |
+| Q4_K_M | 8 | 92.71 ms | 74.88 ms | -19.2% (helps) |
+| Q4_K_M | 10 | 93.96 ms | 61.28 ms | **-34.8% (helps)** |
+
+Same model file, same quantization, same batch size (Q8_0 @ 10) — **+19.9% on Environment 1 vs. -25.6% on Environment 2.** Both machines show the same shape (batching flat-to-negative below batch_size≈8, clearly positive at 8–10) but land on opposite conclusions about whether to enable it.
+
+**Working hypothesis, not confirmed by profiling** — two effects likely both contribute:
+1. A non-causal encode computes dense attention over the whole combined ubatch (cross-sequence entries masked to zero *after* the matmul, not skipped), so attention cost scales with `(combined tokens)²` rather than `Σ(tokens per sequence)²` — a real cost on any hardware.
+2. Each `llama_encode()` call also pays a fixed per-call overhead (thread wake, allocation, bookkeeping) independent of token count. On older/slower hardware that fixed cost is a larger share of total call time, so batching's amortization of it outweighs the attention penalty above; on newer/faster hardware there's less fixed cost to amortize, leaving the attention penalty as the dominant, uncompensated effect.
+
+**Practical takeaway: profile `batch_size` on the actual target deployment hardware rather than assuming either result above** — a batching decision tuned on one machine does not transfer to another. Reproduce with `./embedding_bench_batch <config.toml> --rounds 50 --batch-size N` per quantization; use 50+ rounds — 10–20 rounds showed too much run-to-run spread to be reliable.
+
+### GPU offload (Environment 2)
+
+Environment 2 also has a CUDA-capable GPU (NVIDIA GeForce GTX 745, 2 GiB VRAM, no tensor cores, PCIe-connected, driver 470.256.02, CUDA 11.8, Walkrie built with `-DGGML_CUDA=ON`) left unused above. Setting `[embedding] n_gpu_layers` (default `0` = CPU-only, unchanged behavior) to offload some of BGE-M3's 24 layers produces two opposite, monotonic trends — GPU engagement confirmed live via `nvidia-smi` utilization/memory during each run:
+
+| Quantization | n_gpu_layers | Sequential avg/row | Batched avg/row |
+|---|---|---|---|
+| Q4_K_M | 0 (CPU) | 93.96 ms | 61.28 ms |
+| Q4_K_M | 4 | 99.90 ms | 48.48 ms |
+| Q4_K_M | 99 (full) | 162.24 ms | **44.61 ms** |
+| Q8_0 | 0 (CPU) | 87.20 ms | 64.88 ms |
+| Q8_0 | 16 | 140.21 ms | **46.31 ms** |
+
+**Batched calls keep improving with more offload** (down to -29% vs. the CPU-only batched number); **sequential calls keep getting worse** (up to +73%), in both quantizations. Likely cause: each `llama_encode()` call touching GPU-resident layers pays a fixed PCIe host↔device transfer cost. A batched call spreads that cost across 10 sequences in one call; a sequential call pays it 10 separate times for one sequence each, so more offloaded layers add transfer overhead with no batch to amortize it against. Not confirmed via profiling.
+
+**Practical takeaway: only enable GPU offload on hardware like this if the deployment actually uses `embed_batch()` with a meaningful batch size** (`[app] batch_size > 1`) — offloading for a `batch_size=1` deployment makes it slower, not faster. Reproduce with `./embedding_bench_batch <config.toml> --rounds 50 --batch-size 10` after setting `n_gpu_layers`, and confirm engagement with `nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv -l 1` running alongside it — a misconfigured build can silently fall back to CPU with no error at any layer count.
 
 ## 6. Backfill drain: worker-count and thread-count scaling (`embed_backfill_batched_bench`)
 

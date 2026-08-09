@@ -12,7 +12,8 @@ LlamaProvider::LlamaProvider(const EmbeddingConfig& cfg)
     : model_path_(cfg.model_path)
     , n_threads_(cfg.n_threads)
     , n_ctx_(cfg.n_ctx)
-    , n_batch_(cfg.max_batch_size) {}
+    , n_batch_(cfg.max_batch_size)
+    , n_gpu_layers_(cfg.n_gpu_layers) {}
 
 LlamaProvider::~LlamaProvider() {
     if (ctx_)   llama_free(ctx_);
@@ -24,16 +25,25 @@ void LlamaProvider::init()
 {
     llama_log_set([](ggml_log_level level, const char* text, void* /*user_data*/) {
         switch (level) {
-            case GGML_LOG_LEVEL_ERROR: spdlog::error("[llama] {}", text); break;
-            case GGML_LOG_LEVEL_WARN:  spdlog::warn("[llama] {}", text);  break;
-            default:                  spdlog::debug("[llama] {}", text); break;
+            case GGML_LOG_LEVEL_ERROR: 
+                spdlog::error("[llama] {}", text); break;
+            case GGML_LOG_LEVEL_WARN:  
+                spdlog::warn("[llama] {}", text);  break;
+            default:
+                spdlog::debug("[llama] {}", text); break;
         }
     }, nullptr);
 
     llama_backend_init();
 
     llama_model_params mparams = llama_model_default_params();
-    mparams.n_gpu_layers = 0; // CPU only; set > 0 when GPU support added
+    mparams.n_gpu_layers = n_gpu_layers_;
+    if (n_gpu_layers_ > 0 && !llama_supports_gpu_offload()) {
+        spdlog::warn("[LlamaProvider] n_gpu_layers={} requested but this build has no GPU backend — "
+                     "falling back to CPU-only. Rebuild with -DGGML_CUDA=ON to use GPU offload.",
+                     n_gpu_layers_);
+        mparams.n_gpu_layers = 0; // CPU only
+    }
 
     model_ = llama_model_load_from_file(model_path_.c_str(), mparams);
     if (!model_) {
@@ -67,8 +77,11 @@ void LlamaProvider::init()
     }
 
     spdlog::info("[LlamaProvider] loaded {} ({} dims)", model_path_, dimensions());
-    spdlog::info("[LlamaProvider] ACTUAL ctx_ config: n_ctx={} n_batch={} n_ubatch={} n_seq_max={}",
-                 llama_n_ctx(ctx_), llama_n_batch(ctx_), llama_n_ubatch(ctx_), llama_n_seq_max(ctx_));
+    spdlog::info("[LlamaProvider] ACTUAL ctx_ config: "
+             "n_ctx={} n_batch={} n_ubatch={} n_seq_max={} n_gpu_layers_requested={} model_n_layer={}",
+             llama_n_ctx(ctx_), llama_n_batch(ctx_),
+             llama_n_ubatch(ctx_), llama_n_seq_max(ctx_),
+             mparams.n_gpu_layers, llama_model_n_layer(model_));
 }
 
 std::vector<LlamaTokenizedText> LlamaProvider::tokenize_batch(const std::vector<std::string>& texts)

@@ -66,7 +66,8 @@ struct TableMapping
     std::string discriminator_label_;  // fixed value for every row from this mapping
 
 
-    void resolve_columns() {
+    void resolve_columns() 
+    {
         for (const auto& m : columns) {
             if (m.role == "id") {
                 id_source_ = m.source_column;
@@ -89,6 +90,7 @@ struct EmbeddingConfig
     int         n_threads       = 4;        // llama.cpp CPU threads
     int         n_ctx           = 512;      // llama.cpp context window
     int         max_batch_size  = 1;        // llama.cpp batch size; equalized to app batch size internally
+    int         n_gpu_layers    = 0;        // llama.cpp gpu layers if llama.cpp has gpu offload support
     std::string validate        = "none";   //  none|warn|force; check model file for dimensions
 };
 
@@ -99,7 +101,8 @@ struct AppConfig
     std::vector<std::unique_ptr<SinkConfiguration>> sinks;
     EmbeddingConfig                                 embedding;
 
-    std::vector<std::string> validate() const {
+    std::vector<std::string> validate() const 
+    {
         std::vector<std::string> errors;
 
         const std::vector<std::string> valid_levels = {
@@ -310,6 +313,7 @@ inline AppConfig load_config(const std::string& path)
         cfg.embedding.dimensions  = i32(e, "dimensions",   cfg.embedding.dimensions);
         cfg.embedding.n_threads   = i32(e, "n_threads",    cfg.embedding.n_threads);
         cfg.embedding.n_ctx       = i32(e, "n_ctx",        cfg.embedding.n_ctx);
+        cfg.embedding.n_gpu_layers= i32(e, "n_gpu_layers", cfg.embedding.n_gpu_layers);
         cfg.embedding.validate    = str(e, "validate",     cfg.embedding.validate);
     }
     cfg.embedding.max_batch_size = cfg.settings.batch_size;
