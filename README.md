@@ -49,9 +49,11 @@ Like any logical-replication consumer (Debezium included), Walkrie's replication
 Walkrie ships as a `.deb` package. After installing:
 
 ```bash
-sudo dpkg -i walkrie_1.2.1~alpha2-1_amd64.deb
+sudo dpkg -i walkrie_1.2.0~alpha1-1_amd64.deb
 sudo apt install -f   # resolve any missing runtime dependencies
 ```
+
+**Note:** the published `.deb` is still on 1.2.0~alpha1 — the 1.2.1~alpha2 build hit GitHub's immutable-releases lock on the existing release before it could be uploaded (see the RPM and Docker image for current 1.2.1~alpha2 packages in the meantime).
 
 The package creates a dedicated `walkrie` system user, installs a systemd unit (enabled but **not started** — see below), and creates:
 

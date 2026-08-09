@@ -168,9 +168,11 @@ For GPU offload with the local Llama provider, add `-DGGML_CUDA=ON` to the `cmak
 ## Installation (pre-built `.deb` package)
 
 ```bash
-sudo dpkg -i walkrie_1.2.1~alpha2-1_amd64.deb
+sudo dpkg -i walkrie_1.2.0~alpha1-1_amd64.deb
 sudo apt install -f
 ```
+
+**Note:** the published `.deb` is still on 1.2.0~alpha1 — the 1.2.1~alpha2 build hit GitHub's immutable-releases lock on the existing release before it could be uploaded. RPM and Docker are current at 1.2.1~alpha2.
 
 This installs `/usr/bin/walkrie` and `/usr/bin/walkrie_worker` (the latter spawned automatically by `walkrie` to drain `backfill = true` sources, resolved from the same directory — see Spawn/Reap below), a config template to `/etc/walkrie/config.toml`, a systemd unit (enabled, not auto-started), and creates `/var/lib/walkrie/models/`, `/var/lib/walkrie/backfill/` (per-source SQLite staging stores, see Initial Backfill Scan below), and `/var/log/walkrie/`. See the README's [Installation](./README.md#installation-debianubuntu) section for the post-install steps (model placement, config editing, service start).
 
