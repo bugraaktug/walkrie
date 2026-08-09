@@ -16,6 +16,7 @@ This document describes the internal architecture of Walkrie's PostgreSQL-to-vec
 - [Compilation (from source)](#compilation-from-source)
 - [Installation (pre-built `.deb` package)](#installation-pre-built-deb-package)
   - [Model Installation](#model-installation)
+- [Installation (RPM package)](#installation-rpm-package)
 - [Docker Build](#docker-build)
 - [Configuration Syntax](#configuration-syntax)
   - Batching (`batch_size` / `batch_timeout_ms`)
@@ -140,6 +141,7 @@ backfill    = true
 
 * PostgreSQL 15+ with logical replication enabled (`wal_level = logical`), a replication slot, and a publication covering the tables you want to sync.
 * `libpq`, `libevent`, `spdlog`, `toml++`, `nlohmann-json` development packages.
+* `sqlite3` development package, though its version matters: `BackfillStore::claim_pending` relies on the `RETURNING` clause (SQLite 3.35.0+) for an atomic claim-without-race. `CMakeLists.txt` detects the system version at configure time and uses it if new enough; otherwise it transparently fetches and builds the SQLite amalgamation from source instead (needs network access during the build) — e.g. RHEL/Rocky 9's `sqlite-devel` (3.34.x) is too old and always takes this fallback path.
 * `libcurl` development package (`libcurl4-openssl-dev` on Debian/Ubuntu) if using the OpenAI embedding provider.
 * A `llama.cpp` checkout and a compatible GGUF embedding model if using the local Llama provider. See [Model Installation](#model-installation) below.
 * Optionally, the CUDA toolkit if you want GPU offload for the local Llama provider — pass `-DGGML_CUDA=ON` at the `cmake` step (see Compilation below) and set `n_gpu_layers` in `[embedding]`. Not required for a CPU-only build.
@@ -185,6 +187,25 @@ sudo chown walkrie:walkrie /var/lib/walkrie/models/bge-m3-Q4_K_M.gguf
 ```
 
 Set `model_path` in `/etc/walkrie/config.toml` to match. At startup, Walkrie validates that `model_path` exists, is a regular file, is readable by the running user, and is non-empty — a missing or misconfigured model produces a clear config-validation error rather than a runtime crash.
+
+## Installation (RPM package)
+
+No pre-built `.rpm` is published yet — build one from `packaging/rpm/`:
+
+```bash
+git submodule update --init --recursive   # if not already done
+./packaging/rpm/make-tarball.sh
+rpmbuild --define "_topdir $HOME/rpmbuild" -ba packaging/rpm/walkrie.spec
+sudo dnf install $HOME/rpmbuild/RPMS/x86_64/walkrie-1.2.0~alpha1-1.*.rpm
+```
+
+`make-tarball.sh` vendors `third_party/llama.cpp`'s submodule content directly into the source tarball rather than relying on `git submodule update` inside the build — `git archive` alone doesn't recurse into submodules, and `rpmbuild` environments (`mock`/`koji` particularly) commonly run with no network access.
+
+Build dependencies (see `packaging/rpm/walkrie.spec`'s `BuildRequires` for the exact list): `cmake`, `gcc-c++`, `libpq-devel`, `libevent-devel`, `libcurl-devel`, `json-devel`, `spdlog-devel`, `sqlite-devel`, `systemd-rpm-macros` — `json-devel` and `spdlog-devel` come from EPEL on RHEL/Rocky, not the base repos. See Prerequisites above for the `sqlite-devel` version note: RHEL/Rocky 9's shipped version is too old, so the build transparently falls back to fetching SQLite's amalgamation from source, which needs network access during `%build`.
+
+Installs the same layout as the `.deb` package above: `/usr/bin/walkrie` and `/usr/bin/walkrie_worker`, a config template to `/etc/walkrie/config.toml`, a systemd unit (enabled, not auto-started), and `/var/lib/walkrie/models/`, `/var/lib/walkrie/backfill/` (per-source SQLite staging stores). See the README's [Installation](./README.md#installation-rocky-linux--rhel--fedora-family) section for the post-install steps — identical to the `.deb` instructions, same paths, same unit.
+
+One deliberate difference from the `.deb`'s `postrm purge` case: erasing the RPM (`rpm -e` / `dnf remove`) does **not** delete the `walkrie` user, `/var/lib/walkrie`, `/var/log/walkrie`, or `/etc/walkrie` — `rpm -e` has no equivalent "purge vs. remove" distinction to key that off, and most RPM-packaged system services leave their service user and data in place on erase rather than deleting them unconditionally.
 
 ## Docker Build
 

@@ -1,0 +1,77 @@
+* Sun Aug 09 2026 bugra <bugraaktug@gmail.com> - 1.2.0~alpha1-1
+- Added RPM packaging (packaging/rpm/), mirroring packaging/debian/*: same
+  walkrie system user/group, /etc/walkrie, /var/lib/walkrie/{models,backfill}
+  layout, and systemd unit.
+- LlamaProvider gained optional GPU offload via a new n_gpu_layers config
+  field (CUDA, requires -DGGML_CUDA=ON at build time); silently falls back
+  to CPU-only with a warning if the running build has no GPU backend. See
+  PERFORMANCE.md Section 5 for measured effect (hardware-dependent) and
+  TECHNICAL.md's Known Limitations.
+- CMakeLists.txt's SQLite3 detection now checks the system version and
+  falls back to fetching/building the amalgamation from source when it
+  predates 3.35.0 (RETURNING clause support) instead of a hard
+  find_package(SQLite3 REQUIRED) that would fail outright on older
+  systems (e.g. RHEL/Rocky 9's stock sqlite-devel).
+- test_sink_batch_mode's single-vs-batch embedding comparison now gates
+  on cosine distance instead of raw per-dimension max_abs_diff, since the
+  latter isn't equivalently strict across providers with different
+  output vector scales; max_abs_diff is still printed as diagnostic
+  context on a mismatch.
+- LSN acknowledgment is now tied to durable sink writes, not to WAL
+  parsing: EventDispatcher tracks each source's confirmed LSN per batch
+  and only advances it once every required sink has durably applied that
+  batch, closing a window where a crash between decode and a sink's
+  write caused silent data loss on restart.
+- New per-sink durability tiers: required (default; failure blocks
+  confirmation, retries with exponential backoff up to a 60s stall
+  ceiling, then triggers graceful shutdown) or best-effort
+  (required = false; failure is logged and skipped).
+- Fixed a related LSN-correctness bug: every ChangeEvent was stamped
+  with its own row-change WAL position rather than the transaction's
+  real commit LSN, and Commit messages produced no event at all, so the
+  confirmed LSN could never reach a transaction's true commit boundary.
+  Commit messages now yield an Op::Commit marker event carrying the
+  correct commit LSN.
+- Initial backfill scan (WLK-0001): backfill = true on a [[source]]
+  dumps pre-existing rows into a per-source SQLite staging store, then
+  drains them via a separate walkrie_worker process running concurrently
+  with live CDC streaming; live events for still-pending rows are
+  reconciled rather than raced, and crash-resume covers both an
+  interrupted dump and a worker that died mid-drain.
+- Fixed a silent gap where TRUNCATE (including CASCADE) on a watched
+  source table produced no ChangeEvent at all; pgoutput_parser now
+  decodes it and PgEmbeddingSink applies a scoped or whole-table bulk
+  DELETE against the sink table.
+- Fixed missing libsqlite3-dev in the .deb's Build-Depends and the
+  Dockerfile's build stage; fixed walkrie_worker never being installed
+  by either the .deb or the Docker image; fixed
+  /var/lib/walkrie/backfill never being created by either install path.
+- THIRD-PARTY-LICENSES.md now documents SQLite and actually ships in the
+  .deb's doc directory.
+- Added a GitHub Actions CI workflow: build + unit test on every push/PR
+  to main.
+- Known limitation: per-sink queues (isolating one stuck required sink
+  from the rest of the pipeline) are not yet implemented.
+
+* Thu Jul 30 2026 bugra <bugraaktug@gmail.com> - 1.1.0~alpha1-1
+- Docker packaging: multi-stage Dockerfile (statically-linked llama.cpp,
+  non-root runtime image), docker-compose.sample.yml, install docs.
+- Optional event batching (batch_size/batch_timeout_ms in [app]) plus a
+  real OpenAIProvider::embed_batch() (one HTTP request for N texts) —
+  measured ~7.3x lower per-row latency at batch_size=10.
+- LlamaProvider real multi-sequence batched embedding (embed_batch() via
+  n_seq_max) rather than the default per-embed() loop; measured ~20%
+  slower per row than sequential calls on the hardware tested at the
+  time, unlike OpenAI's batching.
+- Correctness finding: embed()/embed_batch() match within epsilon for
+  Q8_0 quantization but diverge meaningfully for Q4_K_M.
+- Fixed missing libspdlog-dev in the .deb's Build-Depends.
+- Known limitation: local Llama batching implemented but not yet a
+  throughput win.
+
+* Mon Jul 20 2026 bugra <bugraaktug@gmail.com> - 1.0.1~alpha1-1
+- Initial alpha release: real-time WAL streaming via native logical
+  replication, local (llama.cpp) and OpenAI embedding providers,
+  postgres-embedding and json-output sink types, static discriminator
+  support for multi-source sink tables.
+- Known limitation: single-threaded, unbatched embedding calls.

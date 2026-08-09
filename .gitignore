@@ -9,3 +9,8 @@ packaging/debian/*.substvars
 packaging/debian/*.log
 packaging/debian/debhelper-build-stamp
 obj-x86_64-linux-gnu/
+
+# rpmbuild artifacts (packaging/rpm/build.sh output)
+packaging/rpm/*.tar.gz
+packaging/rpm/dist/
+*.rpm
