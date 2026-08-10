@@ -10,6 +10,12 @@ endif()
 
 add_compile_options(-Wall -Wextra)
 
+# Sanitized builds: -DWALKRIE_SANITIZE=ON
+option(WALKRIE_SANITIZE "Build walkrie_core with AddressSanitizer + UndefinedBehaviorSanitizer" OFF)
+if(WALKRIE_SANITIZE)
+  set(WALKRIE_SANITIZE_FLAGS -fsanitize=address,undefined -fno-omit-frame-pointer)
+endif()
+
 # Locate libpq. On most distros `pg_config` tells us where headers/libs live.
 find_program(PG_CONFIG pg_config)
 if(PG_CONFIG)
@@ -135,6 +141,11 @@ target_link_libraries(walkrie_core PUBLIC
     ggml
     SQLite::SQLite3
 )
+
+if(WALKRIE_SANITIZE)
+  target_compile_options(walkrie_core PUBLIC ${WALKRIE_SANITIZE_FLAGS})
+  target_link_options(walkrie_core PUBLIC ${WALKRIE_SANITIZE_FLAGS})
+endif()
 
 # --- main binary ---
 add_executable(walkrie src/main.cpp)

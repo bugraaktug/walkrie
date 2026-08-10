@@ -165,6 +165,8 @@ make -j$(nproc)
 
 For GPU offload with the local Llama provider, add `-DGGML_CUDA=ON` to the `cmake` step (requires the CUDA toolkit installed; passed straight through to `llama.cpp`'s own `add_subdirectory`, no separate Walkrie-side build flag). Without it, `n_gpu_layers > 0` in config is accepted but silently falls back to CPU-only at runtime — see the `n_gpu_layers` note under Configuration Syntax below.
 
+For a sanitized build (ASan + UBSan on walkrie's own code, for local leak/UB checking), add `-DWALKRIE_SANITIZE=ON` to the `cmake` step.
+
 ## Installation (pre-built `.deb` package)
 
 ```bash

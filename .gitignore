@@ -1,4 +1,5 @@
 /build/
+/build-asan/
 *.swp
 *openai*.toml
 # dpkg-buildpackage artifacts (written through the debian/ symlink into packaging/debian/)
