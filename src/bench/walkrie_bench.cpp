@@ -11,6 +11,7 @@
 #include <spdlog/spdlog.h>
 
 #include "config.hpp"
+#include "embedding_provider.hpp"
 #include "event_dispatcher.hpp"
 #include "http_client.hpp"
 #include "pgembedding_sink.hpp"
@@ -91,7 +92,11 @@ int main(int argc, char** argv)
     // Only the first configured sink is benchmarked — this binary is for
     // isolating one sink type's contribution to lag/CPU/RAM at a time
     // (json vs pg), not measuring a multi-sink fan-out.
-    auto real_sink = cfg.sinks.front()->create_sink(cfg.embedding);
+    const auto& sink_cfg = cfg.sinks.front();
+    auto provider = sink_cfg->needs_embedding_provider()
+        ? pgcdc::create_initialized_embedding_provider(cfg.embedding)
+        : nullptr;
+    auto real_sink = sink_cfg->create_sink(provider);
     auto bench_sink = std::make_shared<pgcdc::bench::BenchmarkingSink>(real_sink, lag_stats);
     std::vector<pgcdc::SinkHandle> sinks{ bench_sink };
 

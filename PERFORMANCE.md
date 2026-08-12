@@ -15,9 +15,9 @@ All benchmarks were run locally, source and sink on the same machine (`localhost
 - [2. Embedding provider latency](#2-embedding-provider-latency-isolated-embedding_bench)
   - [Local Llama (BGE-M3, Q4_K_M)](#local-llama-bge-m3-q4_k_m)
   - [OpenAI (text-embedding-3-small)](#openai-text-embedding-3-small)
-- [3. End-to-end pipeline (local Llama provider)](#3-end-to-end-pipeline-postgres-embedding-sink-local-llama-provider)
+- [3. End-to-end pipeline (local Llama provider)](#3-end-to-end-pipeline-pgvector-sink-local-llama-provider)
   - Real Llama batching enabled (`batch_size = 8`, Q8_0)
-- [4. End-to-end pipeline (OpenAI provider)](#4-end-to-end-pipeline-postgres-embedding-sink-openai-provider)
+- [4. End-to-end pipeline (OpenAI provider)](#4-end-to-end-pipeline-pgvector-sink-openai-provider)
 - [5. Batched vs. sequential embedding calls](#5-batched-vs-sequential-embedding-calls)
   - [OpenAI](#openai-text-embedding-3-small-embedding_batch_bench)
   - Local Llama — hardware-dependent effect
@@ -123,11 +123,11 @@ Consistent across two independent runs (100 calls: avg 64.72 ms; 200 calls: avg 
 
 The single 2,707.74 ms max looks like an occasional network/API-side spike rather than a pattern — p95 (442.27 ms) is a more representative worst case. With AVX2 correctly exposed, local Llama (avg 63.32 ms) is ~4.8× faster than OpenAI (avg 306.66 ms) on this hardware, with no network dependency, no per-call cost, and no data leaving the host.
 
-## 3. End-to-end pipeline (postgres-embedding sink, local Llama provider)
+## 3. End-to-end pipeline (pgvector sink, local Llama provider)
 
 Purpose: full pipeline, real embedding calls, real pgvector upsert — the number that matters for deployment sizing.
 
-**Config**: `sink.type = "postgres-embedding"`, `provider = "llama"`. Sink table (`test_embeddings`) and source table (`test_table`) truncated before each run — see the index-growth note below.
+**Config**: `sink.type = "pgvector"`, `provider = "llama"`. Sink table (`test_embeddings`) and source table (`test_table`) truncated before each run — see the index-growth note below.
 
 | | 500 rows, batched 10×100 | 200 rows, single-transaction burst | 200 rows, batched 10×20 |
 |---|---|---|---|
@@ -165,7 +165,7 @@ Throughput across all three (8.2–9.1 events/sec) sits inside the same ~7–10 
 
 The two batched-load columns are backlog-bound the same way as above (200÷8.6=23.3s vs. 22.4s max; 500÷8.2=61.0s vs. 59.0s max). The burst column does *not* satisfy that check (200÷9.1=22.0s processing vs. a 56.3s max lag) — its 200 rows share one `commit_timestamp`, so lag there also folds in the time between that commit and `walkrie_bench` starting to drain the slot, not just this run's own queue-drain time. Treat this column's throughput/resource figures as the meaningful takeaway, not its lag numbers.
 
-## 4. End-to-end pipeline (postgres-embedding sink, OpenAI provider)
+## 4. End-to-end pipeline (pgvector sink, OpenAI provider)
 
 Not run as a separate end-to-end benchmark — Section 2 already isolates the per-call latency difference between providers (Llama avg 63.32 ms vs. OpenAI avg 306.66 ms), the dominant variable between an OpenAI- and Llama-backed run; pgvector upsert cost (Section 3, ~4–8 ms/row) and pipeline overhead (Section 1) are provider-independent. Left as a future addition if OpenAI-specific network variance becomes worth answering directly.
 

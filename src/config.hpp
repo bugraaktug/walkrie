@@ -297,7 +297,7 @@ inline AppConfig load_config(const std::string& path)
     if (auto* arr = tbl["sink"].as_array()) {
         for (auto& elem : *arr) {
             if (auto* s = elem.as_table()) {
-                std::string sink_type = str(s, "type", "postgres-embedding");
+                std::string sink_type = str(s, "type", "pgvector");
                 auto sink_instance = instantiate_sink(sink_type);
                 sink_instance->load_from_config(*s);
                 cfg.sinks.push_back(std::move(sink_instance));
@@ -320,5 +320,12 @@ inline AppConfig load_config(const std::string& path)
 
     return cfg;
 }
+
+static inline bool any_sink_needs_provider(const pgcdc::AppConfig& cfg)
+{
+    return std::any_of(cfg.sinks.begin(), cfg.sinks.end(), 
+           [](const auto& s) { return s->needs_embedding_provider(); });
+}
+
 
 } // namespace pgcdc

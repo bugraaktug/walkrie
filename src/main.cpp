@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
@@ -232,8 +233,12 @@ int main(int argc, char** argv)
  
     std::vector<pgcdc::SinkHandle> sinks;
     try {
+        std::shared_ptr<pgcdc::EmbeddingProvider> shared_provider = any_sink_needs_provider(cfg)
+            ? pgcdc::create_initialized_embedding_provider(cfg.embedding)
+            : nullptr;
+
         for (const auto& sink_instance : cfg.sinks) {
-            auto sink = sink_instance->create_sink(cfg.embedding);
+            auto sink = sink_instance->create_sink(sink_instance->needs_embedding_provider() ? shared_provider : nullptr);
             bool required = sink_instance->required_override.value_or(sink->default_required());
             sinks.emplace_back(sink, required);
         }

@@ -1,15 +1,17 @@
 #include "embedding_provider.hpp"
 
+#include "caching_embedding_provider.hpp"
 #include "llama_provider.hpp"
 #include "openai_provider.hpp"
 #include "config.hpp"
 
+#include <spdlog/spdlog.h>
 #include <stdexcept>
 
-namespace pgcdc 
+namespace pgcdc
 {
 
-std::shared_ptr<EmbeddingProvider> make_embedding_provider(const EmbeddingConfig& cfg) 
+std::shared_ptr<EmbeddingProvider> make_embedding_provider(const EmbeddingConfig& cfg)
 {
     if (cfg.provider == "llama") {
         return std::make_shared<LlamaProvider>(cfg);
@@ -22,6 +24,19 @@ std::shared_ptr<EmbeddingProvider> make_embedding_provider(const EmbeddingConfig
     throw std::runtime_error(
         "make_embedding_provider: unknown provider '" + cfg.provider + "' — "
         "valid values: 'llama', 'openai'");
+}
+
+std::shared_ptr<EmbeddingProvider> create_initialized_embedding_provider(const EmbeddingConfig& cfg, bool use_cached)
+{
+    try {
+        auto provider = make_embedding_provider(cfg);
+        provider->init();
+        if (!use_cached) return provider;
+        return std::make_shared<CachingEmbeddingProvider>(std::move(provider), cache_size_for_batch(cfg.max_batch_size));
+    } catch (const std::exception& e) {
+        spdlog::info("[EmbeddingProvider] failed to initialized — {}", e.what());
+        throw std::runtime_error("EmbeddingProvider: failed to create context");
+    }
 }
 
 std::vector<std::vector<float>> EmbeddingProvider::embed_batch(const std::vector<std::string>& texts) 

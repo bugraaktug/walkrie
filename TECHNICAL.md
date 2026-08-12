@@ -68,10 +68,10 @@ The diagram above shows the forward (decode → sink) path only; there is also a
 * **Blocking consumer wait** — the worker thread blocks on the queue rather than polling, so an idle pipeline consumes negligible CPU.
 * **Purpose**: an embedding API call (especially over HTTP to a remote provider) can take anywhere from milliseconds to seconds. Isolating this behind a queue means a slow embedding call doesn't block WAL consumption or risk the replication slot falling behind.
 * **Optional event batching** — `EventDispatcher` can group up to `batch_size` events (bounded by `batch_timeout_ms`, so low-traffic periods still flush promptly rather than waiting indefinitely to fill a batch) into a single `call_batch()` invocation per sink, instead of dispatching one event at a time. This is what allows a provider's `embed_batch()` to turn N embedding calls into fewer, larger ones (see Sink Layer below). Default `batch_size = 1` reproduces the original one-event-at-a-time behavior exactly — batching is strictly opt-in via config.
-* **Batching applies uniformly across all configured sinks in one dispatch cycle** — grouping happens once, upstream of the per-sink loop, not independently per sink. A `json-output` sink (which has no real batching work to do) still experiences the same grouping delay as a batching-aware `postgres-embedding` sink in the same job, and sinks are processed sequentially in `[[sink]]` config order within a batch — list latency-sensitive sinks first if running multiple sinks together and this matters for your use case.
+* **Batching applies uniformly across all configured sinks in one dispatch cycle** — grouping happens once, upstream of the per-sink loop, not independently per sink. A `json-output` sink (which has no real batching work to do) still experiences the same grouping delay as a batching-aware `pgvector` sink in the same job, and sinks are processed sequentially in `[[sink]]` config order within a batch — list latency-sensitive sinks first if running multiple sinks together and this matters for your use case.
 * **LSN acknowledgment tied to durable sink writes, not to parsing** — `EventDispatcher` tracks the maximum `commit_lsn` seen per source across a processed batch and only fires `on_confirmed_` (which calls `set_confirmed_lsn()` on the originating source) once that batch's required sinks have durably applied it. This closes the gap where acking a WAL position the instant it was decoded meant a crash between decode and sink write caused silent data loss on restart.
 * **Sink durability tiers (`required` / best-effort)** — each configured sink is either `required` (a failure blocks confirmation and triggers retry) or best-effort (a failure is logged and the batch proceeds). Default comes from `EventSink::default_required()` (`true`; `JsonSink` overrides to `false`), overridable per-sink via `required = true/false` in that sink's `[[sink]]` block. `SinkHandle{sink, required}` carries the resolved flag alongside the `shared_ptr` through `EventJob.sinks`.
-* **Retry with exponential backoff, bounded by a time ceiling** — `EventDispatcher::dispatch()` iterates a batch's sinks; `dispatch_with_retry()` handles one sink's outcome. A best-effort sink that throws is logged (identified by `EventSink::name()`, e.g. `postgres-embedding`/`json-output`) and skipped immediately. A required sink that throws is retried with exponential backoff (500ms initial, ×2 multiplier) up to a 60-second total stall ceiling — both configurable via `EventDispatcher`'s constructor, though `main.cpp` currently uses the production defaults with no config-file knob yet. If a required sink is still failing once the ceiling is reached, that batch is never confirmed — its LSN is never reported to Postgres, so the affected WAL range replays on restart against (hopefully by then) a recovered sink — and the dispatcher triggers a fatal shutdown rather than looping forever or silently dropping data.
+* **Retry with exponential backoff, bounded by a time ceiling** — `EventDispatcher::dispatch()` iterates a batch's sinks; `dispatch_with_retry()` handles one sink's outcome. A best-effort sink that throws is logged (identified by `EventSink::name()`, e.g. `pgvector`/`json-output`) and skipped immediately. A required sink that throws is retried with exponential backoff (500ms initial, ×2 multiplier) up to a 60-second total stall ceiling — both configurable via `EventDispatcher`'s constructor, though `main.cpp` currently uses the production defaults with no config-file knob yet. If a required sink is still failing once the ceiling is reached, that batch is never confirmed — its LSN is never reported to Postgres, so the affected WAL range replays on restart against (hopefully by then) a recovered sink — and the dispatcher triggers a fatal shutdown rather than looping forever or silently dropping data.
 * **Fatal shutdown avoids new cross-thread libevent calls** — a required sink's ceiling breach fires `EventDispatcher`'s `on_fatal` callback (once, guarded internally) from the dispatcher's worker thread. Rather than waking the libevent thread directly (which would need `evthread_use_pthreads()` plus linking `libevent_pthreads`, neither present in this project), the callback sets a `std::atomic<bool> terminate` owned by `main.cpp`; a small dedicated libevent timer (`on_terminate_poll`, 200ms interval) polls it and calls `event_base_loopbreak()` when set — reusing the exact same shutdown path as `SIGTERM`/`SIGINT` (`on_shutdown_signal`), one shutdown path, not two. 200ms is negligible added latency for what should be a rare event.
 * **Blast radius (current, v1)** — one shared `EventDispatcher` (one queue, one worker thread) serves every configured source and sink. A required sink stuck retrying stalls the whole pipeline, not just the source/sink pair that's actually failing. Per-sink queues, isolating a stuck required sink to just that sink, are a stated future direction — not yet designed or implemented.
 
@@ -91,7 +91,7 @@ The diagram above shows the forward (decode → sink) path only; there is also a
 * **Upsert-based writes** — sink writes use `INSERT ... ON CONFLICT (id) DO UPDATE`, making replays and reconnects safe without manual deduplication.
 * **Skip-unchanged updates** — on `Update` events, `PgEmbeddingSink` skips the embedding call entirely if the embed column is TOAST-unchanged or textually identical to the prior value, avoiding unnecessary embedding cost on updates that didn't touch the embedded field. This check applies identically whether an event arrives via the single-event or batched path.
 * **Pluggable embedding providers** — a common `EmbeddingProvider` interface abstracts over local (`llama.cpp`) and remote (OpenAI HTTP API) backends; new providers implement `init()`, `embed()`, `dimensions()`, and `name()`. Providers additionally expose `embed_batch()`, defaulting to a loop over `embed()` for providers that haven't implemented real batching — `OpenAIProvider` overrides this with a genuine single-request batched call (`"input": [text1, text2, ...]`); `LlamaProvider` now overrides it too, with a real multi-sequence `llama_encode()` call (see Known Limitations below for the measured performance and correctness findings).
-* **Pluggable sink types** — a `SinkConfiguration` interface (`postgres-embedding`, `json-output`) allows multiple sink blocks in one config, each independently constructing and owning its runtime `EventSink`. `EventSink` similarly exposes `call_batch()`, defaulting to a loop over `call()`; `PgEmbeddingSink` overrides it with real batching (below).
+* **Pluggable sink types** — a `SinkConfiguration` interface (`pgvector`, `json-output`) allows multiple sink blocks in one config, each independently constructing and owning its runtime `EventSink`. `EventSink` similarly exposes `call_batch()`, defaulting to a loop over `call()`; `PgEmbeddingSink` overrides it with real batching (below).
 * **Batched upsert ordering (`PgEmbeddingSink::call_batch`)** — validates every event in a batch first (skip-unchanged checks, null/empty-field checks — no database writes yet), collects everything needing an embedding into one `embed_batch()` call, then applies every resulting action (upserts *and* deletes) in a second pass, strictly preserving the batch's original event order. This ordering guarantee matters concretely: if an insert and a delete for the same row land in the same batch, applying them out of original order (e.g. running the delete immediately during validation, before a same-batch insert has been upserted) can silently resurrect a row that should have ended up deleted. The two-pass design exists specifically to prevent that. Covered by both a unit test (`test_pgembedding_sink_batch_ordering.cpp`) and a live-database integration test (see Testing below).
 * **`TRUNCATE` handling** — a `Truncate` event runs a bulk `DELETE` against the sink table instead of the per-row keyed delete used for `Delete` events, since a truncated source table carries no row identifiers to key off. When the table mapping has a `discriminator_column` configured, the delete is scoped to that mapping's `discriminator_label` (`DELETE FROM <sink> WHERE <discriminator> = <label>`); without one, there is no column that identifies which sink rows came from which source table, so the delete has no `WHERE` clause at all and removes every row in the sink table — logged as a warning at execution time. `TRUNCATE ... CASCADE` on a watched table's dependents is handled the same way, one bulk delete per relation named in the WAL message (see Decode Layer above). Same two-pass ordering as upserts/deletes: a truncate is applied at its original position in the batch, not deferred or reordered relative to same-batch inserts/deletes for other tables.
 
@@ -247,7 +247,7 @@ slot_name   = "cdc_slot"
 publication = "test_pub"
 
 [[sink]]
-type            = "postgres-embedding"
+type            = "pgvector"
 host            = "localhost"
 port            = "5432"
 dbname          = "qdb"
@@ -286,9 +286,9 @@ validate   = "force"   # "none" (default) | "warn" | "force" — see note below
 
 **Note on `n_gpu_layers`** (llama provider only): number of the model's transformer layers to offload to GPU via `llama.cpp`'s CUDA backend (`mparams.n_gpu_layers` in `LlamaProvider::init()`). Default `0` runs entirely on CPU, unchanged behavior for existing deployments. Requires Walkrie itself to be built with GPU support (`cmake .. -DGGML_CUDA=ON`, then rebuilt) — `LLAMA_DIR`'s `add_subdirectory` picks up `GGML_CUDA` from the top-level cmake invocation, there's no separate Walkrie-side flag. If `n_gpu_layers > 0` but the running build has no GPU backend (`llama_supports_gpu_offload()` returns false), `LlamaProvider` logs a warning and silently falls back to `n_gpu_layers = 0` rather than failing — check the startup log line (`n_gpu_layers_requested=` vs. `model_n_layer=`) to confirm offload is actually active, and cross-check with `nvidia-smi` if in doubt. **Offload only pays off when paired with `embed_batch()`** (i.e. `[app] batch_size > 1`) — on the entry-level GPU this was benchmarked against, enabling it for `batch_size = 1` deployments made sequential `embed()` calls slower, not faster, because each call pays a fixed PCIe host↔device transfer cost with no batch of rows to amortize it across. See PERFORMANCE.md §5 for the full measurements (both quantizations, several layer counts) before enabling this in production.
 
-**Note on `type` in `[[sink]]`:** if omitted, defaults to `postgres-embedding`.
+**Note on `type` in `[[sink]]`:** if omitted, defaults to `pgvector`.
 
-**Note on `required` in `[[sink]]`:** if omitted, defaults per sink type — `true` for `postgres-embedding`, `false` for `json-output`. A `required` sink's failures are retried with backoff and can trigger a fatal shutdown; a best-effort (`required = false`) sink's failures are logged and skipped. See "Sink durability tiers" in the Isolation Layer section above.
+**Note on `required` in `[[sink]]`:** if omitted, defaults per sink type — `true` for `pgvector`, `false` for `json-output`. A `required` sink's failures are retried with backoff and can trigger a fatal shutdown; a best-effort (`required = false`) sink's failures are logged and skipped. See "Sink durability tiers" in the Isolation Layer section above.
 
 ### Batching (`batch_size` / `batch_timeout_ms`)
 
@@ -303,7 +303,7 @@ batch_timeout_ms = 50
 * `batch_size` (default `1`) — maximum number of events `EventDispatcher` groups into a single `call_batch()` invocation per sink. `1` reproduces the pre-batching one-event-at-a-time behavior exactly.
 * `batch_timeout_ms` (default `50`) — maximum time to wait for a batch to fill before processing whatever's been collected so far. Ensures a lone event during a quiet period still gets processed promptly rather than waiting indefinitely for more events that may never arrive.
 * `batch_size` also drives `EmbeddingConfig::max_batch_size` internally (`cfg.embedding.max_batch_size = cfg.settings.batch_size` in `config.hpp`'s `load_config()`) — there's no separate embedding-specific batch-size field to set. `OpenAIProvider` benefits from `batch_size > 1` with a genuine reduction in HTTP round-trips (measured ~7.3× lower per-row latency at `batch_size=10` — see PERFORMANCE.md §5). `LlamaProvider` now also does real batched computation (see Known Limitations above) — but measured, its effect is hardware-dependent rather than a fixed win: a ~20% per-row *slowdown* on one machine, vs. up to ~35% lower per-row latency (and further gains with `n_gpu_layers` offload) on another — see PERFORMANCE.md §5 and profile on your actual deployment hardware before picking a value.
-* Batching groups events across **all** configured sinks in one dispatch cycle, not independently per sink — see the Isolation Layer note above if running `json-output` alongside `postgres-embedding`.
+* Batching groups events across **all** configured sinks in one dispatch cycle, not independently per sink — see the Isolation Layer note above if running `json-output` alongside `pgvector`.
 * **`[app] batch_size` and `walkrie_worker --batch-size` are unrelated despite the name.** `[app] batch_size` only governs `EventDispatcher`'s grouping of *live* events — backfill never goes through `EventDispatcher` at all, it's driven entirely by `--batch-size` (see Initial Backfill Scan above).
 
 ### Multiple sources into one sink table (discriminator)
@@ -330,7 +330,7 @@ slot_name   = "pgcdc_slot"
 publication = "pgcdc_pub"
 
 [[sink]]
-type            = "postgres-embedding"
+type            = "pgvector"
 host            = "localhost"
 port            = "5432"
 dbname          = "qdb"
@@ -383,7 +383,7 @@ n_ctx      = 512
 
 ### Multiple sink blocks
 
-More than one `[[sink]]` block can be declared — e.g. a `postgres-embedding` sink alongside a `json-output` debug sink:
+More than one `[[sink]]` block can be declared — e.g. a `pgvector` sink alongside a `json-output` debug sink:
 
 ```toml
 [[sink]]
@@ -391,7 +391,7 @@ type           = "json-output"
 output_target  = "stdout"   # "stdout", "discard", or a file path
 
 [[sink]]
-type            = "postgres-embedding"
+type            = "pgvector"
 host            = "localhost"
 port            = "5432"
 dbname          = "qdb"

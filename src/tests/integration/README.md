@@ -181,6 +181,114 @@ worth re-verifying on any new deployment hardware before trusting a
 specific tolerance value, since the two machines measured so far already
 disagree with each other.
 
+## Qdrant Sink Integration Test (`test_qdrant_sink`)
+
+`test_qdrant_sink.cpp` is `test_sink_batch_mode`'s sibling for `QdrantSink`
+instead of `PgEmbeddingSink` — same single-vs-batch cross-comparison
+approach (bypasses `EventDispatcher`, calls the sink's public API directly),
+against a real running Qdrant instance and real embeddings. Two dedicated
+collections (`walkrie_it_qdrant_single`/`walkrie_it_qdrant_batch`), created
+automatically if missing (`PUT /collections/{name}` with the provider's real
+`dimensions()` and Cosine distance) since `QdrantSink::init()` deliberately
+does not auto-create.
+
+### Scenarios
+
+Same four core scenarios as `test_sink_batch_mode` (`simple_inserts`,
+`inserts_then_updates_including_unchanged_skip`, `insert_then_delete_same_id`,
+`delete_then_insert_same_id`) — the ordering-regression case in particular
+(insert+delete for the same id in one batch must not resurrect the row) is
+exactly what `QdrantSink::call_batch()`'s two-pass pattern needs to hold too.
+
+Plus one Qdrant-specific scenario not applicable to Postgres:
+
+- **`discriminator_scoped_truncate_and_id_collision`** — two `TableMapping`s
+  (`table_a`/`table_b`) sharing one collection, with overlapping source ids
+  (`"1"`/`"2"`/`"3"` in both). Verifies `point_id_for()`'s
+  `"<discriminator_label>:<source_id>"` hashing keeps the two mappings'
+  same-id rows as distinct points (no silent overwrite — the exact
+  collision bug caught during slice 2 design review, see the qdrant sink
+  design memo) **and** that a `table_a`-scoped truncate leaves `table_b`'s
+  points untouched.
+
+Embedding comparison uses the same cosine-distance `--epsilon` convention as
+`test_sink_batch_mode` — see that section above for why (scale-invariance
+across providers) and the machine/quantization-dependent tolerance caveats,
+which apply identically here since both sinks call the same
+`EmbeddingProvider::embed()`/`embed_batch()`.
+
+### Running
+
+```bash
+./test_qdrant_sink ../config_samples/config_sample_qdrant.toml
+```
+
+Only `[embedding]` in the config is read (to construct the real provider);
+`[source]`/`[sink]` exist only to make it a loadable config file — this test
+builds its own `QdrantSink` instances directly, same as
+`test_sink_batch_mode` does for `PgEmbeddingSink`. Requires a running Qdrant
+instance reachable at `http://localhost:6333` (hardcoded — this test is
+single-purpose, not meant to be pointed at arbitrary deployments).
+
+Exit code is `0` if all scenarios pass (main + discriminator), `1`
+otherwise — same convention as the other integration tests here.
+
+**Measured (2026-08-11, `bge-m3-Q4_K_M.gguf`, this dev VM):** all correctness
+checks (present/absent spot checks, item_body, point counts, discriminator
+scoping/collision) passed at every epsilon tried. The embedding
+cross-comparison itself failed at `--epsilon 0.001` (observed cosine
+distance ~0.0022-0.0028 for `embed()` vs. `embed_batch()` on the same text)
+and passed cleanly at `--epsilon 0.01` — consistent with `test_sink_batch_mode`'s
+documented finding that Q4_K_M diverges well past a tight epsilon on every
+machine tested; this is the first actual number recorded for it. Not
+necessarily portable to a different machine/build — re-measure per the
+guidance in the `test_sink_batch_mode` section above rather than assuming
+`0.01` generalizes.
+
+## Dual-Sink Postgres+Qdrant Integration Test (`test_dual_sink_pg_qdrant`)
+
+`test_dual_sink_pg_qdrant.cpp` is the actual dual-write correctness check —
+distinct from both `test_sink_batch_mode` (Postgres single-vs-batch) and
+`test_qdrant_sink` (Qdrant single-vs-batch), which each verify one sink type
+internally. This one loads `config_sample_pg_and_qdrant.toml` — a real
+two-source, two-sink-type config (`pgvector` + `qdrant`) — through
+the exact same code path `main.cpp` uses: `load_config()` ->
+`instantiate_sink()`/`load_from_config()` dispatch -> one shared
+`EmbeddingProvider` -> `SinkConfiguration::create_sink()` per configured
+sink. It then drives both resulting `EventSink`s through `call_batch()` with
+the same batch events, exactly like `EventDispatcher::dispatch()` does, and
+asserts Postgres and Qdrant end up holding the **same set of rows/points**.
+
+### Scenarios
+
+Same core regression scenarios as the single-sink tests
+(`simple_inserts`, `update_including_unchanged_skip`,
+`insert_then_delete_same_id`, `delete_then_insert_same_id`), each verified
+present/absent AND content-equal across **both** backends, plus:
+
+- **`discriminator_scoped_truncate`** — the config's two source tables
+  (`test_table`/`documents`) share one Postgres table and one Qdrant
+  collection, distinguished by `category`. Truncating `test_table` must
+  clear it in both backends while leaving `documents` untouched in both.
+
+### Running
+
+```bash
+./test_dual_sink_pg_qdrant                                            # defaults to ../config_samples/config_sample_pg_and_qdrant.toml
+./test_dual_sink_pg_qdrant ../config_samples/config_sample_pg_and_qdrant.toml
+```
+
+The config file's own `[[sink]]` blocks carry real connection info (both
+Postgres conninfo fields and the Qdrant `url`) — unlike `test_sink_batch_mode`,
+there's no separate `--conninfo` flag; this test reads the same config a
+real `walkrie` process would. Postgres table and Qdrant collection are
+created automatically if missing. Requires a running Postgres reachable per
+the config's pgvector sink fields, and a running Qdrant reachable
+at the config's qdrant sink's `url`.
+
+Exit code is `0` if all scenarios pass, `1` otherwise — same convention as
+the other integration tests here.
+
 ## Sink Dimension-Check Integration Test (`test_sink_dims_check`)
 
 `test_sink_dims_check.cpp` verifies `PgEmbeddingSink::verify_sink_column_dimensions()`

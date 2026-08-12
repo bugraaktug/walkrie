@@ -16,7 +16,7 @@ slot_name   = "cv_cdc_slot"
 publication = "cv_pub"
 
 [[sink]]
-type            = "postgres-embedding"
+type            = "pgvector"
 host            = "localhost"
 port            = "5432"
 dbname          = "hr_demo"
