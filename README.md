@@ -4,7 +4,7 @@
 
 A low-latency PostgreSQL-to-vector sync engine that keeps your embeddings up to date as your source data changes.
 
-Walkrie streams, validates, and syncs PostgreSQL transactional data into vector embeddings (`pgvector`, with pluggable OpenAI or local Llama backends) in real time — no batch jobs, no polling, no cron.
+Walkrie streams, validates, and syncs PostgreSQL transactional data into vector embeddings (`pgvector` or Qdrant, with pluggable OpenAI or local Llama embedding backends) in real time — no batch jobs, no polling, no cron.
 
 Built in native C++ using asynchronous `libevent` I/O and a lock-free single-producer/single-consumer (SPSC) queue, Walkrie is designed to isolate slow, unpredictable embedding API calls from your live Postgres replication stream, so a slow embedding provider never causes replication lag to build up unbounded.
 
@@ -26,6 +26,7 @@ Like any logical-replication consumer (Debezium included), Walkrie's replication
 * **OpenAI & local Llama integrations** — switch embedding provider via a single config field.
 * **Skip-unchanged & null-safety checks** — update events skip re-embedding when the source text didn't actually change (TOAST-unchanged column, or identical old/new value), and rows with a missing id or embed value are dropped before any embedding call — avoiding wasted API/inference cost on no-op updates.
 * **`TRUNCATE` support** — truncating a watched table (including via `CASCADE`) is no longer a silent gap: it's decoded per relation and applied as a bulk delete against the sink table, scoped to that table's discriminator when configured (see TECHNICAL.md).
+* **Qdrant sink** — write embeddings to a Qdrant collection over REST instead of (or alongside — dual-write is supported) `pgvector`, using the same table-mapping, batching, and discriminator-scoped truncate config as the `pgvector` sink. Source ids are mapped to Qdrant's required point-id format via a fixed-namespace UUIDv5. See TECHNICAL.md for config and details.
 * **Optional event batching** — group multiple change events into a single embedding call instead of one call per row (`batch_size`/`batch_timeout_ms` in config, off by default). Throughput effect is provider- and hardware-dependent — see PERFORMANCE.md for measured numbers before enabling in production.
 * **Optional GPU offload for the local Llama provider** (`n_gpu_layers` in config, requires building with `-DGGML_CUDA=ON`) — offload model layers to a CUDA GPU. Whether this helps depends on your hardware and whether batching is also enabled — see PERFORMANCE.md.
 * **Initial backfill scan for pre-existing rows** (`backfill = true` per `[[source]]`) — scans and embeds rows that already existed in a mapped table when its replication slot was first created, without pausing live streaming, and resumes cleanly across a crash. See TECHNICAL.md for the design.

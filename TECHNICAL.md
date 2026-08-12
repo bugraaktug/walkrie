@@ -22,6 +22,7 @@ This document describes the internal architecture of Walkrie's PostgreSQL-to-vec
   - Batching (`batch_size` / `batch_timeout_ms`)
   - [Multiple sources into one sink table (discriminator)](#multiple-sources-into-one-sink-table-discriminator)
   - [Multiple sink blocks](#multiple-sink-blocks)
+  - [Qdrant sink](#qdrant-sink)
   - [OpenAI provider](#openai-provider)
 - [Execution](#execution)
 - [Testing](#testing)
@@ -91,7 +92,8 @@ The diagram above shows the forward (decode → sink) path only; there is also a
 * **Upsert-based writes** — sink writes use `INSERT ... ON CONFLICT (id) DO UPDATE`, making replays and reconnects safe without manual deduplication.
 * **Skip-unchanged updates** — on `Update` events, `PgEmbeddingSink` skips the embedding call entirely if the embed column is TOAST-unchanged or textually identical to the prior value, avoiding unnecessary embedding cost on updates that didn't touch the embedded field. This check applies identically whether an event arrives via the single-event or batched path.
 * **Pluggable embedding providers** — a common `EmbeddingProvider` interface abstracts over local (`llama.cpp`) and remote (OpenAI HTTP API) backends; new providers implement `init()`, `embed()`, `dimensions()`, and `name()`. Providers additionally expose `embed_batch()`, defaulting to a loop over `embed()` for providers that haven't implemented real batching — `OpenAIProvider` overrides this with a genuine single-request batched call (`"input": [text1, text2, ...]`); `LlamaProvider` now overrides it too, with a real multi-sequence `llama_encode()` call (see Known Limitations below for the measured performance and correctness findings).
-* **Pluggable sink types** — a `SinkConfiguration` interface (`pgvector`, `json-output`) allows multiple sink blocks in one config, each independently constructing and owning its runtime `EventSink`. `EventSink` similarly exposes `call_batch()`, defaulting to a loop over `call()`; `PgEmbeddingSink` overrides it with real batching (below).
+* **Pluggable sink types** — a `SinkConfiguration` interface (`pgvector`, `qdrant`, `json-output`) allows multiple sink blocks in one config, each independently constructing and owning its runtime `EventSink`. `EventSink` similarly exposes `call_batch()`, defaulting to a loop over `call()`; `PgEmbeddingSink` and `QdrantSink` override it with real batching (below).
+* **`QdrantSink`** (`src/qdrant_sink.hpp/cpp`) — REST-only via `HttpClient`, sharing the same two-pass `call_batch()` pattern as `PgEmbeddingSink` (validate everything, one `embed_batch()` call, then apply upserts/deletes/truncate in original event order — see the ordering note below, which applies identically here). Qdrant point ids must be a `uint64` or UUID, so source ids are mapped through a fixed-namespace UUIDv5 (`point_id_for()`); the namespace constant is permanent, since changing it would remap every existing point. All writes use `?wait=true` so the durable-write guarantee `EventDispatcher`'s LSN confirmation relies on holds the same way it does for `pgvector`. `QdrantSink::init()` is verify-only — it checks the collection exists and its vector size matches the embedding provider's `dimensions()`, but never auto-creates a collection (matching `pgvector`'s "Walkrie never `CREATE TABLE`s" philosophy) — create/tune the collection (HNSW params, distance metric, quantization) yourself first. A `pgvector` sink and a `qdrant` sink can be configured together in the same `[[sink]]` list (dual-write) — see "Qdrant sink" under Configuration Syntax below.
 * **Batched upsert ordering (`PgEmbeddingSink::call_batch`)** — validates every event in a batch first (skip-unchanged checks, null/empty-field checks — no database writes yet), collects everything needing an embedding into one `embed_batch()` call, then applies every resulting action (upserts *and* deletes) in a second pass, strictly preserving the batch's original event order. This ordering guarantee matters concretely: if an insert and a delete for the same row land in the same batch, applying them out of original order (e.g. running the delete immediately during validation, before a same-batch insert has been upserted) can silently resurrect a row that should have ended up deleted. The two-pass design exists specifically to prevent that. Covered by both a unit test (`test_pgembedding_sink_batch_ordering.cpp`) and a live-database integration test (see Testing below).
 * **`TRUNCATE` handling** — a `Truncate` event runs a bulk `DELETE` against the sink table instead of the per-row keyed delete used for `Delete` events, since a truncated source table carries no row identifiers to key off. When the table mapping has a `discriminator_column` configured, the delete is scoped to that mapping's `discriminator_label` (`DELETE FROM <sink> WHERE <discriminator> = <label>`); without one, there is no column that identifies which sink rows came from which source table, so the delete has no `WHERE` clause at all and removes every row in the sink table — logged as a warning at execution time. `TRUNCATE ... CASCADE` on a watched table's dependents is handled the same way, one bulk delete per relation named in the WAL message (see Decode Layer above). Same two-pass ordering as upserts/deletes: a truncate is applied at its original position in the batch, not deferred or reordered relative to same-batch inserts/deletes for other tables.
 
@@ -406,6 +408,41 @@ embed_column    = "embedding"
  discriminator_label  = "test"
  # ...
 ```
+
+### Qdrant sink
+
+The Qdrant collection must exist before Walkrie starts — `QdrantSink::init()` verifies the collection and its vector size, it does not auto-create one:
+
+```bash
+curl -X PUT http://localhost:6333/collections/test_embeddings \
+  -H "Content-Type: application/json" \
+  -d '{"vectors": {"size": 1024, "distance": "Cosine"}}'
+```
+
+```toml
+[[sink]]
+type       = "qdrant"
+url        = "http://localhost:6333"
+api_key    = ""
+collection = "test_embeddings"
+
+ [[sink.table_mapping]]
+ source_table = "test_table"
+
+    [[sink.table_mapping.columns]]
+    source_column = "id"
+    sink_column   = "item_id"
+    role          = "id"
+
+    [[sink.table_mapping.columns]]
+    source_column = "name"
+    sink_column   = "item_name"
+    role          = "embed"
+```
+
+`table_mapping`/`columns`/`discriminator_column`/`discriminator_label`/`batch_size`/`required` all work identically to the `pgvector` sink (see above and "Multiple sources into one sink table" above) — the discriminator scopes both id collisions across mappings sharing one collection and what a `TRUNCATE` deletes, same as `pgvector`. Source ids don't need to already be UUIDs or integers — `QdrantSink` hashes `<discriminator_label>:<source_id>` (or just `<source_id>` with no discriminator) into a UUIDv5 point id, so arbitrary text/serial ids from Postgres work as-is.
+
+**Dual-write to `pgvector` and `qdrant`** — declare both as separate `[[sink]]` blocks in the same config; both are driven off one shared `EmbeddingProvider` instance (wrapped in a `CachingEmbeddingProvider`, `src/caching_embedding_provider.hpp/cpp`, a 64-entry LRU decorator) so a row shared by both sinks' mappings is embedded once, not twice, per batch. See `config_samples/config_sample_pg_and_qdrant.toml` for a full two-sink example.
 
 ### OpenAI provider
 
