@@ -55,7 +55,7 @@ void JsonSinkConfiguration::load_from_config(const toml::table& t)
     if (auto req = t.get_as<bool>("required")) required_override = **req;
 }
 
-std::shared_ptr<EventSink> JsonSinkConfiguration::create_sink(const EmbeddingConfig&) const 
+std::shared_ptr<EventSink> JsonSinkConfiguration::create_sink(std::shared_ptr<EmbeddingProvider>) const
 {
     spdlog::info("[SinkConfiguration] initialized sink — {}", type());
     return std::make_shared<JsonSink>(output_target);

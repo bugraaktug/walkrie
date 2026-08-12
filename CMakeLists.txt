@@ -35,6 +35,7 @@ find_package(spdlog CONFIG REQUIRED)
 find_package(PkgConfig REQUIRED)
 find_package(CURL REQUIRED)
 pkg_check_modules(LIBEVENT REQUIRED libevent)
+pkg_check_modules(UUID REQUIRED uuid)
 
 set(WALKRIE_SQLITE_MIN_VERSION "3.35.0")
 pkg_check_modules(SYSTEM_SQLITE3 QUIET sqlite3)
@@ -109,11 +110,14 @@ add_library(walkrie_core STATIC
     src/sink_configuration.cpp
     src/pgsink_configuration.cpp
     src/jsonsink_configuration.cpp
+    src/qdrantsink_configuration.cpp
+    src/qdrant_sink.cpp
     src/pgoutput_parser.cpp
     src/pgreplication_source.cpp
     src/llama_provider.cpp
     src/openai_provider.cpp
     src/embedding_provider.cpp
+    src/caching_embedding_provider.cpp
     src/pgembedding_sink.cpp
     src/model/gguf_metadata_reader.cpp
     src/backfill_store.cpp
@@ -128,12 +132,14 @@ target_include_directories(walkrie_core PUBLIC
     ${CMAKE_SOURCE_DIR}/src/queue
     ${PG_INCLUDE_DIR}
     ${LIBEVENT_INCLUDE_DIRS}
+    ${UUID_INCLUDE_DIRS}
     ${LLAMA_DIR}/include
     ${LLAMA_DIR}/ggml/include
 )
 target_link_libraries(walkrie_core PUBLIC
     pq
     ${LIBEVENT_LIBRARIES}
+    ${UUID_LIBRARIES}
     nlohmann_json::nlohmann_json
     spdlog::spdlog_header_only
     CURL::libcurl
@@ -163,6 +169,8 @@ add_executable(walkrie_tests
     src/tests/test_event_dispatcher.cpp
     src/tests/test_config.cpp
     src/tests/test_config_model.cpp
+    src/tests/test_qdrant_sink_configuration.cpp
+    src/tests/test_caching_embedding_provider.cpp
     src/tests/test_upsert_sql.cpp
     src/tests/test_xframe_log.cpp
     src/tests/test_parser.cpp
@@ -183,6 +191,20 @@ add_executable(test_sink_batch_mode
 target_include_directories(test_sink_batch_mode PRIVATE
     src src/include src/third_party)
 target_link_libraries(test_sink_batch_mode PRIVATE
+    walkrie_core)
+
+add_executable(test_qdrant_sink
+    src/tests/integration/test_qdrant_sink.cpp)
+target_include_directories(test_qdrant_sink PRIVATE
+    src src/include src/third_party)
+target_link_libraries(test_qdrant_sink PRIVATE
+    walkrie_core)
+
+add_executable(test_dual_sink_pg_qdrant
+    src/tests/integration/test_dual_sink_pg_qdrant.cpp)
+target_include_directories(test_dual_sink_pg_qdrant PRIVATE
+    src src/include src/third_party)
+target_link_libraries(test_dual_sink_pg_qdrant PRIVATE
     walkrie_core)
 
 add_executable(test_sink_dims_check

@@ -1,8 +1,6 @@
-#include "pgsink_configuration.hpp"
-#include "pgembedding_sink.hpp"
-#include "pg_sql_builder.hpp"
+#include "qdrantsink_configuration.hpp"
+#include "qdrant_sink.hpp"
 #include "embedding_provider.hpp"
-#include <sstream>
 #include <spdlog/spdlog.h>
 
 namespace pgcdc
@@ -11,7 +9,7 @@ namespace pgcdc
 namespace
 {
 
-std::string str_or(const toml::table* t, const char* key, const std::string& def) 
+std::string str_or(const toml::table* t, const char* key, const std::string& def)
 {
     if (!t) return def;
     auto v = t->get_as<std::string>(key);
@@ -20,15 +18,11 @@ std::string str_or(const toml::table* t, const char* key, const std::string& def
 
 }
 
-void PgSinkConfiguration::load_from_config(const toml::table& t) 
+void QdrantSinkConfiguration::load_from_config(const toml::table& t)
 {
-    host     = str_or(&t, "host",     host);
-    port     = str_or(&t, "port",     port);
-    dbname   = str_or(&t, "dbname",   dbname);
-    user     = str_or(&t, "user",     user);
-    password = str_or(&t, "password", password);
-    table    = str_or(&t, "table",    table);
-    embedding_column = str_or(&t, "embed_column", embedding_column);
+    url        = str_or(&t, "url",        url);
+    api_key    = str_or(&t, "api_key",    api_key);
+    collection = str_or(&t, "collection", collection);
 
     if (auto req = t.get_as<bool>("required")) required_override = **req;
 
@@ -64,20 +58,14 @@ void PgSinkConfiguration::load_from_config(const toml::table& t)
     }
 }
 
-std::vector<std::string> PgSinkConfiguration::validate() const 
+std::vector<std::string> QdrantSinkConfiguration::validate() const
 {
     std::vector<std::string> errors;
-    if (dbname.empty()) {
-        errors.push_back("[sink] dbname is required");
+    if (url.empty()) {
+        errors.push_back("[sink] url is required");
     }
-    if (user.empty()) {
-        errors.push_back("[sink] user is required");
-    }
-    if (table.empty()) { 
-        errors.push_back("[sink] table is required");
-    }
-    if (embedding_column.empty()) {
-        errors.push_back("[sink] embedding column is required");
+    if (collection.empty()) {
+        errors.push_back("[sink] collection is required");
     }
     if (table_mappings.empty())
         errors.push_back("[sink] at least one [[sink.table_mapping]] block is required");
@@ -99,24 +87,17 @@ std::vector<std::string> PgSinkConfiguration::validate() const
     return errors;
 }
 
-std::shared_ptr<EventSink> PgSinkConfiguration::create_sink(std::shared_ptr<EmbeddingProvider> provider) const
+std::shared_ptr<EventSink> QdrantSinkConfiguration::create_sink(std::shared_ptr<EmbeddingProvider> provider) const
 {
-    std::ostringstream conn;
-    conn << "host=" << host 
-         << " port=" << port 
-         << " dbname=" << dbname
-         << " user=" << user 
-         << " password=" << password;
+    QdrantSinkConfig sink_cfg;
+    sink_cfg.url        = url;
+    sink_cfg.api_key    = api_key;
+    sink_cfg.collection = collection;
+    sink_cfg.mappings   = table_mappings;
 
-    PgEmbeddingSinkConfig sink_cfg;
-    sink_cfg.pg_conninfo = conn.str();
-    sink_cfg.sink_table  = table;
-    sink_cfg.sink_column = embedding_column;
-    sink_cfg.mappings    = table_mappings;
-
-    auto sink = std::make_shared<PgEmbeddingSink>(sink_cfg, provider);
+    auto sink = std::make_shared<QdrantSink>(sink_cfg, provider);
     sink->init();
-    
+
     spdlog::info("[SinkConfiguration] initialized sink — {}", type());
     return sink;
 }

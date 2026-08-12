@@ -35,7 +35,7 @@ public:
     void init() override;
     void call(const ChangeEvent& event) override;
     void call_batch(const std::vector<ChangeEvent>& events) override;
-    std::string name() const override { return "postgres-embedding"; }
+    std::string name() const override { return "pgvector"; }
 
 protected:
     virtual bool upsert(const TableMapping& tm,

@@ -404,9 +404,9 @@ int main(int argc, char** argv)
     }
 
     std::cerr << "Loading embedding provider (" << cfg.embedding.provider << ")...\n";
-    auto provider = pgcdc::make_embedding_provider(cfg.embedding);
+    std::shared_ptr<pgcdc::EmbeddingProvider> provider;
     try {
-        provider->init();
+        provider = pgcdc::create_initialized_embedding_provider(cfg.embedding, /*use_cached=*/false);
     } catch (const std::exception& e) {
         std::cerr << "error initializing embedding provider: " << e.what() << "\n";
         return 1;

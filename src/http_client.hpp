@@ -17,8 +17,10 @@ struct HttpResponse
     std::string curl_error;            // populated only when curl_ok == false
 };
 
+enum class HttpMethod { Get, Post, Put, Delete };
+
 // Not thread-safe — if you need concurrent requests, use one HttpClient
-// per thread, or add a mutex around perform_post().
+// per thread, or add a mutex around perform().
 class HttpClient
 {
 public:
@@ -33,10 +35,23 @@ public:
     HttpResponse post_json(const std::string& url,
                             const std::string& json_body,
                             const std::vector<std::string>& extra_headers);
+    HttpResponse put_json(const std::string& url,
+                           const std::string& json_body,
+                           const std::vector<std::string>& extra_headers);
+    HttpResponse delete_json(const std::string& url,
+                              const std::string& json_body,
+                              const std::vector<std::string>& extra_headers);
+    HttpResponse get_json(const std::string& url,
+                           const std::vector<std::string>& extra_headers);
 
 private:
     CURL* curl_ = nullptr;
     int   timeout_secs_;
+
+    HttpResponse perform(HttpMethod method,
+                          const std::string& url,
+                          const std::string& json_body,
+                          const std::vector<std::string>& extra_headers);
 };
 
 // Call from main()

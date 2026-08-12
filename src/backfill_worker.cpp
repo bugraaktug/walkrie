@@ -1,8 +1,11 @@
 #include "backfill_worker.hpp"
 
+#include <algorithm>
+
 #include <spdlog/spdlog.h>
 
 #include "config.hpp"
+#include "embedding_provider.hpp"
 
 namespace pgcdc
 {
@@ -49,8 +52,12 @@ bool BackfillWorker::run()
 
     std::vector<std::shared_ptr<EventSink>> sinks;
     try {
+        std::shared_ptr<EmbeddingProvider> shared_provider = any_sink_needs_provider(cfg)
+            ? create_initialized_embedding_provider(cfg.embedding)
+            : nullptr;
+
         for (const auto& sink_instance : cfg.sinks) {
-            sinks.push_back(sink_instance->create_sink(cfg.embedding));
+            sinks.push_back(sink_instance->create_sink(sink_instance->needs_embedding_provider() ? shared_provider : nullptr));
         }
     } catch (const std::exception& e) {
         last_error_ = std::string("sink init failed: ") + e.what();

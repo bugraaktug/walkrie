@@ -48,6 +48,7 @@
 #include <spdlog/spdlog.h>
 
 #include "config.hpp"
+#include "embedding_provider.hpp"
 #include "event_dispatcher.hpp"
 #include "http_client.hpp"
 #include "pgreplication_source.hpp"
@@ -285,7 +286,11 @@ int main(int argc, char** argv)
     pgcdc::bench::LagStats lag_stats;
     std::shared_ptr<pgcdc::EventSink> real_sink;
     try {
-        real_sink = cfg.sinks.front()->create_sink(cfg.embedding);
+        const auto& sink_cfg = cfg.sinks.front();
+        auto provider = sink_cfg->needs_embedding_provider()
+            ? pgcdc::create_initialized_embedding_provider(cfg.embedding)
+            : nullptr;
+        real_sink = sink_cfg->create_sink(provider);
     } catch (const std::exception& e) {
         std::cerr << "sink/embedding provider init failed: " << e.what() << "\n";
         event_base_free(base);
