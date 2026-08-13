@@ -194,7 +194,7 @@ Set `model_path` in `/etc/walkrie/config.toml` to match. At startup, Walkrie val
 
 ## Installation (RPM package)
 
-Pre-built `.rpm`s are published on the [GitHub Releases page](https://github.com/bugraaktug/walkrie/releases) alongside the `.deb`. To build your own instead (e.g. targeting a different RHEL/Rocky/Fedora major version than the published build), use `packaging/rpm/`:
+Pre-built `.rpm`s are published on the [GitHub Releases page](https://github.com/bugraaktug/walkrie/releases) alongside the `.deb`, built against RHEL/Rocky/Fedora 10 (`el10` dist tag, from `rpmbuild`'s `%{?dist}` macro on the build host). To build your own instead — e.g. targeting a different major version — use `packaging/rpm/`:
 
 ```bash
 git submodule update --init --recursive   # if not already done
@@ -492,30 +492,20 @@ Covers WAL frame parsing, `pgoutput` message decoding (including `Truncate` — 
 
 ### Integration tests (live Postgres + real embedding provider required)
 
-`test_sink_batch_mode` verifies that `PgEmbeddingSink::call()` (single-event path) and `call_batch()` (batched path) produce **identical final database state** for the same sequence of events, across 5 deterministic scenarios — including the exact insert+delete-same-batch regression case described above. Runs against two fixed, self-managed tables (`walkrie_it_single`, `walkrie_it_batch`) rather than live WAL streaming, so it's fast and fully repeatable.
+Full scenario-by-scenario write-up for `test_sink_batch_mode`, `test_qdrant_sink`, `test_dual_sink_pg_qdrant`, `test_sink_dims_check`, and `test_backfill_dump` — including the insert+delete-same-batch ordering regression case, and the quantization/hardware-dependent embedding-comparison tolerance discussion referenced in Known Limitations above — lives in `src/tests/integration/README.md`. Run commands:
 
 ```bash
 ./test_sink_batch_mode <config.toml> --conninfo "<pg conninfo>" [--epsilon 1e-6]
-```
-
-See `src/tests/integration/README.md` for the full scenario list. `LlamaProvider` now does real batched computation, so the near-zero default `--epsilon` no longer holds universally — `Q4_K_M` confirmed divergent on every machine tested, `Q8_0` confirmed to pass on one machine and confirmed to fail on another with the same model file — see Known Limitations above before picking a model + epsilon combination for CI, and don't assume a value that worked on one deployment machine carries over to another.
-
-`test_sink_dims_check` verifies `PgEmbeddingSink::verify_sink_column_dimensions()` — the startup check described in the "Note on `dimensions`" above — across 4 cases: matching dims (no throw), mismatched dims (throws, naming both values), an unconstrained `vector` column with no declared dimension (skipped, no throw), and a missing sink column (throws). Needs a real `pg_attribute` lookup, so it's an integration test too, not a doctest case. Uses its own dedicated tables (`walkrie_it_dims_*`) and config (`config_sample_dims_check_test.toml`), independent of `test_sink_batch_mode`'s.
-
-```bash
 ./test_sink_dims_check <config.toml> --conninfo "<pg conninfo>"
+./test_qdrant_sink <config.toml>
+./test_dual_sink_pg_qdrant [<config.toml>]
+./test_backfill_dump <config.toml> [--slot NAME] [--publication NAME] [--table NAME] [--conninfo "<pg conninfo>"]
 ```
 
 `test_lsn_confirm` verifies the LSN-correctness fix described in the Decode Layer section above, directly against a live Postgres: it drives the real `PgReplicationSource` through one transaction on a dedicated table/publication/slot (`walkrie_it_lsn_*`, dropped and recreated each run so it never collides with a real running instance), waits for the `Op::Commit` marker, confirms it exactly as `EventDispatcher` would after a successful sink write, calls `flush_confirmed_lsn()` (the same call `main.cpp` makes on shutdown), and asserts `pg_replication_slots.confirmed_flush_lsn` reaches that transaction's real commit LSN — the exact invariant that prevents the replay-on-restart bug. Includes a "before" sanity check (the confirmed position is still behind the commit LSN prior to the flush call) so the main assertion isn't vacuous. Uses the `[[source]]` block from the given config (host/port/dbname/user/password), not `--conninfo`, since the test exercises actual replication-slot mechanics.
 
 ```bash
 ./test_lsn_confirm <config.toml> [--slot NAME] [--publication NAME] [--table NAME]
-```
-
-`test_backfill_dump` verifies the Initial Backfill Scan design end to end against a live Postgres: fresh-slot dump correctness, a live `Update` on a still-pending row merging into the store and suppressing dispatch, a resumed slot *not* re-dumping, a manually dropped-and-recreated slot re-dumping despite stale state from the prior epoch (the crash-resume fix), and a dump interrupted mid-table (simulated via direct SQLite manipulation) being finished rather than silently skipped on the next resume.
-
-```bash
-./test_backfill_dump <config.toml> [--slot NAME] [--publication NAME] [--table NAME] [--conninfo "<pg conninfo>"]
 ```
 
 `test_backfill_worker_drain` verifies `BackfillWorker::run()` end to end (real claim → embed → upsert → mark_done) against a live Postgres + real embedding provider, seeding the store directly to isolate the drain loop from the dump phase (covered separately above).
