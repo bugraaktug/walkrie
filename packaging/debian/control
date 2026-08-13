@@ -11,6 +11,7 @@ Build-Depends: debhelper-compat (= 13),
                nlohmann-json3-dev,
                libspdlog-dev,
                libsqlite3-dev,
+               uuid-dev,
                git
 Standards-Version: 4.6.2
 Homepage: https://github.com/bugraaktug/walkrie
@@ -29,5 +30,5 @@ Description: PostgreSQL WAL to vector embedding sync engine
  remote (OpenAI) embedding providers. No external message broker
  required.
  .
- This is an early alpha release — see /usr/share/doc/walkrie/PERFORMANCE.md
- for current benchmark numbers and known limitations.
+ See /usr/share/doc/walkrie/PERFORMANCE.md for current benchmark numbers
+ and known limitations.

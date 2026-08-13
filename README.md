@@ -50,11 +50,9 @@ Like any logical-replication consumer (Debezium included), Walkrie's replication
 Walkrie ships as a `.deb` package. After installing:
 
 ```bash
-sudo dpkg -i walkrie_1.2.0~alpha1-1_amd64.deb
+sudo dpkg -i walkrie_1.2.2-1_amd64.deb
 sudo apt install -f   # resolve any missing runtime dependencies
 ```
-
-**Note:** the published `.deb` is still on 1.2.0~alpha1 — the 1.2.1~alpha2 build hit GitHub's immutable-releases lock on the existing release before it could be uploaded (see the RPM and Docker image for current 1.2.1~alpha2 packages in the meantime).
 
 The package creates a dedicated `walkrie` system user, installs a systemd unit (enabled but **not started** — see below), and creates:
 
@@ -85,7 +83,7 @@ If `config.toml` is invalid or the model file is missing/unreadable, `walkrie` w
 Once you have a `.rpm` (see below):
 
 ```bash
-sudo dnf install ./walkrie-1.2.1~alpha2-1.el9.x86_64.rpm   # resolves runtime deps automatically
+sudo dnf install ./walkrie-1.2.2-1.el9.x86_64.rpm   # resolves runtime deps automatically
 ```
 
 Same user, paths (see the table above), and systemd unit as the `.deb` package — post-install steps (model placement, config editing, service start) are identical.
@@ -98,7 +96,7 @@ Post-install steps (model placement, config editing, service start) are the same
 
 ```bash
 git submodule update --init --recursive   # if not already done
-docker build -t walkrie:1.2.1-alpha2 .
+docker build -t walkrie:1.2.2 .
 ```
 
 No config is baked into the image — `config_sample.toml`'s placeholder credentials and `host = "localhost"` mean something different inside a container, so walkrie refuses to start with the same clear config-validation error described above until you bind-mount your own:
@@ -108,7 +106,7 @@ docker run --rm \
     -v "$(pwd)/config.toml:/etc/walkrie/config.toml:ro" \
     -v "$(pwd)/models:/var/lib/walkrie/models:ro" \
     -v "$(pwd)/logs:/var/log/walkrie" \
-    walkrie:1.2.1-alpha2
+    walkrie:1.2.2
 ```
 
 * If your Postgres source/sink runs on the Docker host rather than in the same container network, point `config.toml`'s `host` at `host.docker.internal` (works out of the box with Docker Desktop on Mac/Windows) rather than `localhost`.

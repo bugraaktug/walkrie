@@ -1,3 +1,30 @@
+* Thu Aug 13 2026 bugra <bugraaktug@gmail.com> - 1.2.2-1
+- Added a Qdrant sink (REST via a new HttpClient, all-methods-through-one-
+  perform() dispatch) alongside the existing Postgres sink, supporting
+  dual-write: the same source rows can fan into both a pgvector sink and a
+  Qdrant sink, sharing one CachingEmbeddingProvider so the embedding model
+  runs once per row instead of once per configured sink. Qdrant point ids
+  (which must be u64 or UUID) are derived deterministically from the
+  source id via a fixed-namespace UUIDv5. All writes use ?wait=true so
+  EventDispatcher's durable-write-before-LSN-confirm guarantee holds for
+  this sink too. QdrantSink verifies the target collection exists and its
+  vector size matches the embedding provider's dimensions() at startup —
+  it never auto-creates the collection, matching PgEmbeddingSink's
+  "walkrie never CREATE TABLEs" stance.
+- Renamed the postgres-embedding sink type to pgvector (`type = "pgvector"`
+  in `[[sink]]`) to make room for the new sink type naming convention.
+  Existing configs using `type = "postgres-embedding"` (or relying on the
+  old default) must update to `pgvector`.
+- Fixed missing libuuid-devel in this spec's BuildRequires: the Qdrant
+  sink's point-id generation added a hard pkg_check_modules(UUID REQUIRED
+  uuid) dependency in CMakeLists.txt, wired into the CI workflow's build
+  deps but not into the .deb, RPM, or Docker packaging — all three would
+  fail at configure time. Fixed identically in packaging/debian/control
+  and the Dockerfile's build stage.
+- New -DWALKRIE_SANITIZE=ON CMake option for an ASan+UBSan build of
+  walkrie_core, for local leak/UB checking (see TECHNICAL.md's
+  Compilation section).
+
 * Sun Aug 09 2026 bugra <bugraaktug@gmail.com> - 1.2.1~alpha2-1
 - Added RPM packaging (packaging/rpm/), mirroring packaging/debian/*: same
   walkrie system user/group, /etc/walkrie, /var/lib/walkrie/{models,backfill}

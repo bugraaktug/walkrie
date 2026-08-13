@@ -172,11 +172,9 @@ For a sanitized build (ASan + UBSan on walkrie's own code, for local leak/UB che
 ## Installation (pre-built `.deb` package)
 
 ```bash
-sudo dpkg -i walkrie_1.2.0~alpha1-1_amd64.deb
+sudo dpkg -i walkrie_1.2.2-1_amd64.deb
 sudo apt install -f
 ```
-
-**Note:** the published `.deb` is still on 1.2.0~alpha1 — the 1.2.1~alpha2 build hit GitHub's immutable-releases lock on the existing release before it could be uploaded. RPM and Docker are current at 1.2.1~alpha2.
 
 This installs `/usr/bin/walkrie` and `/usr/bin/walkrie_worker` (the latter spawned automatically by `walkrie` to drain `backfill = true` sources, resolved from the same directory — see Spawn/Reap below), a config template to `/etc/walkrie/config.toml`, a systemd unit (enabled, not auto-started), and creates `/var/lib/walkrie/models/`, `/var/lib/walkrie/backfill/` (per-source SQLite staging stores, see Initial Backfill Scan below), and `/var/log/walkrie/`. See the README's [Installation](./README.md#installation-debianubuntu) section for the post-install steps (model placement, config editing, service start).
 
@@ -202,12 +200,12 @@ No pre-built `.rpm` is published yet — build one from `packaging/rpm/`:
 git submodule update --init --recursive   # if not already done
 ./packaging/rpm/make-tarball.sh
 rpmbuild --define "_topdir $HOME/rpmbuild" -ba packaging/rpm/walkrie.spec
-sudo dnf install $HOME/rpmbuild/RPMS/x86_64/walkrie-1.2.1~alpha2-1.*.rpm
+sudo dnf install $HOME/rpmbuild/RPMS/x86_64/walkrie-1.2.2-1.*.rpm
 ```
 
 `make-tarball.sh` vendors `third_party/llama.cpp`'s submodule content directly into the source tarball rather than relying on `git submodule update` inside the build — `git archive` alone doesn't recurse into submodules, and `rpmbuild` environments (`mock`/`koji` particularly) commonly run with no network access.
 
-Build dependencies (see `packaging/rpm/walkrie.spec`'s `BuildRequires` for the exact list): `cmake`, `gcc-c++`, `libpq-devel`, `libevent-devel`, `libcurl-devel`, `json-devel`, `spdlog-devel`, `sqlite-devel`, `systemd-rpm-macros` — `json-devel` and `spdlog-devel` come from EPEL on RHEL/Rocky, not the base repos. See Prerequisites above for the `sqlite-devel` version note: RHEL/Rocky 9's shipped version is too old, so the build transparently falls back to fetching SQLite's amalgamation from source, which needs network access during `%build`.
+Build dependencies (see `packaging/rpm/walkrie.spec`'s `BuildRequires` for the exact list): `cmake`, `gcc-c++`, `libpq-devel`, `libevent-devel`, `libcurl-devel`, `json-devel`, `spdlog-devel`, `sqlite-devel`, `libuuid-devel`, `systemd-rpm-macros` — `json-devel` and `spdlog-devel` come from EPEL on RHEL/Rocky, not the base repos. See Prerequisites above for the `sqlite-devel` version note: RHEL/Rocky 9's shipped version is too old, so the build transparently falls back to fetching SQLite's amalgamation from source, which needs network access during `%build`.
 
 Installs the same layout as the `.deb` package above: `/usr/bin/walkrie` and `/usr/bin/walkrie_worker`, a config template to `/etc/walkrie/config.toml`, a systemd unit (enabled, not auto-started), and `/var/lib/walkrie/models/`, `/var/lib/walkrie/backfill/` (per-source SQLite staging stores). See the README's [Installation](./README.md#installation-rocky-linux--rhel--fedora-family) section for the post-install steps — identical to the `.deb` instructions, same paths, same unit.
 

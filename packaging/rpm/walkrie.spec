@@ -1,5 +1,5 @@
 Name:           walkrie
-Version:        1.2.1~alpha2
+Version:        1.2.2
 Release:        1%{?dist}
 Summary:        PostgreSQL WAL to vector embedding sync engine
 
@@ -25,6 +25,10 @@ BuildRequires:  json-devel
 BuildRequires:  spdlog-devel
 BuildRequires:  sqlite-devel
 BuildRequires:  systemd-rpm-macros
+# QdrantSink point-id generation (deterministic UUIDv5) — CMakeLists.txt's
+# pkg_check_modules(UUID REQUIRED uuid) needs uuid.pc, provided by this
+# package on RHEL/Rocky/Fedora.
+BuildRequires:  libuuid-devel
 # NOTE: RHEL/Rocky 9's sqlite-devel (3.34.x) predates the RETURNING-clause
 # support (3.35.0+) that BackfillStore::claim_pending relies on for an
 # atomic claim-without-race — CMakeLists.txt detects this at configure
@@ -45,8 +49,8 @@ Walkrie streams PostgreSQL logical replication changes into pgvector
 embeddings in real time, using local (llama.cpp) or remote (OpenAI)
 embedding providers. No external message broker required.
 
-This is an early alpha release — see /usr/share/doc/walkrie/PERFORMANCE.md
-for current benchmark numbers and known limitations.
+See /usr/share/doc/walkrie/PERFORMANCE.md for current benchmark numbers
+and known limitations.
 
 %prep
 %setup -q -n %{name}-%{version}

@@ -5,7 +5,7 @@
 # image, then copy just the binary into a minimal runtime image.
 #
 # Build:
-#   docker build -t walkrie:1.2.1-alpha2 .
+#   docker build -t walkrie:1.2.2 .
 #
 # third_party/llama.cpp must already be checked out (a plain `git clone`
 # without --recurse-submodules leaves it empty — see TECHNICAL.md's
@@ -27,6 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         nlohmann-json3-dev \
         libspdlog-dev \
         libsqlite3-dev \
+        uuid-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -51,15 +52,18 @@ FROM debian:12-slim AS runtime
 LABEL org.opencontainers.image.title="walkrie" \
       org.opencontainers.image.description="PostgreSQL WAL to vector embedding sync engine" \
       org.opencontainers.image.source="https://github.com/bugraaktug/walkrie" \
-      org.opencontainers.image.version="1.2.1-alpha2"
+      org.opencontainers.image.version="1.2.2"
 
 # Runtime shared libs only — llama.cpp/ggml are statically linked in
 # (BUILD_SHARED_LIBS=OFF above), same as the .deb package's Depends, plus
-# two transitive ones the .deb's control file is also missing (see
+# transitive ones the .deb's control file is also missing (see
 # packaging/debian/control's libspdlog-dev fix): Debian's spdlog package
 # links spdlog_header_only against system libfmt rather than bundling its
-# own copy, and ggml's OpenMP-based CPU backend needs libgomp even though
-# ggml itself is statically linked in.
+# own copy, ggml's OpenMP-based CPU backend needs libgomp even though
+# ggml itself is statically linked in, and QdrantSink's point-id UUIDv5
+# generation needs libuuid at runtime (present via util-linux on a full
+# install, but listed explicitly here since --no-install-recommends
+# doesn't guarantee it).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq5 \
         libevent-2.1-7 \
@@ -67,6 +71,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libfmt9 \
         libgomp1 \
         libsqlite3-0 \
+        libuuid1 \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --create-home --home-dir /var/lib/walkrie --shell /usr/sbin/nologin walkrie \
