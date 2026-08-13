@@ -80,15 +80,15 @@ If `config.toml` is invalid or the model file is missing/unreadable, `walkrie` w
 
 ## Installation (Rocky Linux / RHEL / Fedora-family)
 
-Once you have a `.rpm` (see below):
+Download the `.rpm` from the [GitHub Releases page](https://github.com/bugraaktug/walkrie/releases), or build your own (see below):
 
 ```bash
-sudo dnf install ./walkrie-1.2.2-1.el9.x86_64.rpm   # resolves runtime deps automatically
+sudo dnf install ./walkrie-1.2.2-1.el10.x86_64.rpm   # resolves runtime deps automatically
 ```
 
 Same user, paths (see the table above), and systemd unit as the `.deb` package — post-install steps (model placement, config editing, service start) are identical.
 
-RPM packaging lives in `packaging/rpm/` — see [TECHNICAL.md](./TECHNICAL.md#installation-rpm-package) for how to build one and the required build dependencies.
+RPM packaging lives in `packaging/rpm/` — see [TECHNICAL.md](./TECHNICAL.md#installation-rpm-package) for how to build one yourself (e.g. targeting a different RHEL/Rocky/Fedora major version) and the required build dependencies.
 
 Post-install steps (model placement, config editing, service start) are the same as the `.deb` instructions above — same paths, same systemd unit.
 

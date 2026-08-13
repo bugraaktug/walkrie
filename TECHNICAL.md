@@ -194,7 +194,7 @@ Set `model_path` in `/etc/walkrie/config.toml` to match. At startup, Walkrie val
 
 ## Installation (RPM package)
 
-No pre-built `.rpm` is published yet — build one from `packaging/rpm/`:
+Pre-built `.rpm`s are published on the [GitHub Releases page](https://github.com/bugraaktug/walkrie/releases) alongside the `.deb`. To build your own instead (e.g. targeting a different RHEL/Rocky/Fedora major version than the published build), use `packaging/rpm/`:
 
 ```bash
 git submodule update --init --recursive   # if not already done
