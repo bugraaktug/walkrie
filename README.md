@@ -44,6 +44,23 @@ Like any logical-replication consumer (Debezium included), Walkrie's replication
 * **Teams running RAG or semantic search on top of an existing Postgres database** who want embeddings to stay current without building and maintaining a custom sync pipeline.
 * **Resource-constrained engineering teams** who want a single lightweight binary instead of standing up Kafka or a scripted batch job to keep a vector store in sync.
 
+## Build from Source
+
+```bash
+git clone --recurse-submodules https://github.com/bugraaktug/walkrie.git
+cd walkrie
+mkdir build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo
+make -j$(nproc)
+```
+
+Requires system dev packages: `libpq`, `libevent`, `spdlog`, `toml++`,
+`nlohmann-json`, `libcurl`, `uuid-dev`, `sqlite3` (≥3.35.0, or let CMake
+fetch/build it — see below). Add `-DGGML_CUDA=ON` for GPU offload support.
+See [TECHNICAL.md](./TECHNICAL.md#compilation-from-source) for the full
+prerequisite list and platform-specific notes (e.g. RHEL/Rocky 9's system
+sqlite3 being too old).
+
 ## Installation (Debian/Ubuntu)
 
 Walkrie ships as a `.deb` package. After installing:
@@ -118,6 +135,16 @@ docker run --rm \
 Walkrie runs entirely within your own infrastructure. Database credentials, replicated data, and schema details stay local to wherever you deploy the binary — nothing is sent to any third party.
 If you configure the OpenAI embedding provider, only the specific text fields you've mapped for embedding are sent to OpenAI's API, under OpenAI's own data handling terms — Walkrie itself does not collect or transmit any data.
 
+## Try It: CV Search Demo
+
+The fastest way to see walkrie actually work — not just read about it — is
+the worked example in [`demo/`](./demo/README.md): seed a Postgres table
+with synthetic CVs, run walkrie against it with local (offline) embeddings
+(including an initial backfill of the pre-existing rows), and query them
+with a small hybrid semantic + SQL search CLI. It walks through every
+step, including the couple of Postgres/backfill gotchas that trip people
+up on a first run, and ends with inserting a live row and watching it show
+up in search results with no batch job or manual sync step.
 
 ## License
 

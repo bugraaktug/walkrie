@@ -27,7 +27,14 @@ CREATE ROLE walkrie_demo WITH LOGIN REPLICATION PASSWORD 'changeme';
 
 ```sql
 GRANT ALL PRIVILEGES ON DATABASE hr_demo TO walkrie_demo;
+GRANT ALL ON SCHEMA public TO walkrie_demo;
 ```
+
+The second grant matters on Postgres 15+: `CREATE DATABASE` no longer
+grants `CREATE` on the `public` schema to new roles by default (that
+changed in PG15), so without it `walkrie_demo` can connect fine but can't
+create the tables in the next two steps — `GRANT ALL PRIVILEGES ON
+DATABASE` alone is a database-level grant and doesn't cover this.
 
 (Terminal equivalent, if you prefer: `createdb hr_demo` and
 `createuser --replication --pwprompt walkrie_demo`.)
@@ -93,15 +100,44 @@ Requires the local Llama provider — see TECHNICAL.md's
 haven't already placed a GGUF model.
 
 Edit `demo/config_cv_demo.toml` if your DB credentials or model path
-differ from the defaults, then run walkrie in the foreground so you can
-watch it work:
+differ from the defaults. The config's `[[source]]` block sets
+`backfill = true` — this is what picks up the 300 candidates you already
+inserted in step 2: `cv_cdc_slot` doesn't exist yet, so this is a
+first-ever slot creation, and walkrie dumps and embeds every pre-existing
+row in `candidates` before it starts streaming live changes (see
+[TECHNICAL.md](../TECHNICAL.md#5-initial-backfill-scan)). Without
+`backfill = true`, a freshly created slot only sees rows inserted *after*
+it exists, and the 300 seeded rows would silently never make it into
+`candidate_search`.
+
+`[app] backfill_dir` in the config points at `/tmp/walkrie_backfill`
+rather than the default `/var/lib/walkrie/backfill` — that default is
+only writable under the packaged `.deb`/`.rpm` install (owned by the
+`walkrie` system user), so a from-source run needs it pointed somewhere
+you can actually write to.
+
+Make sure the log and backfill directories exist first (walkrie doesn't
+create them for you), then run walkrie in the foreground:
 
 ```bash
+mkdir -p /tmp/logs /tmp/walkrie_backfill
 walkrie -f -c demo/config_cv_demo.toml
 ```
 
-You should see 300 `insert event received` / `upserted` log lines stream
-by as walkrie catches up on the seeded data.
+`-f` only means walkrie won't daemonize — with `log_file` set in the
+config, all logging still goes to `/tmp/logs/walkrie.log`, not the
+terminal, so watch it via:
+
+```bash
+tail -f /tmp/logs/walkrie.log
+```
+
+You should see `upserted` log lines for all 300 candidates (dumped by a
+separate `walkrie_worker` backfill process, not the main process), followed
+by a `[BackfillManager] backfill drain complete for source 'cv_cdc_slot'`
+line once it's caught up. Wait for that line before moving on to step 6 —
+querying before the backfill finishes will just return a partial result
+set.
 
 ## 6. Build and run the search CLI
 

@@ -3,6 +3,7 @@ log_level = "debug"
 log_file  = "/tmp/logs/walkrie.log"
 log_max_size_mb  = 10
 log_max_files    = 5
+backfill_dir     = "/tmp/walkrie_backfill"  # default is /var/lib/walkrie/backfill, only writable under the packaged install
 batch_size       = 20
 batch_timout_ms  = 50
 
@@ -14,6 +15,7 @@ user        = "walkrie_demo"
 password    = "walkrie"
 slot_name   = "cv_cdc_slot"
 publication = "cv_pub"
+backfill    = true
 
 [[sink]]
 type            = "pgvector"
