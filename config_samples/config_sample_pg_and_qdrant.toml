@@ -119,7 +119,7 @@ collection = "test_embeddings_dual"
 
 [embedding]
 provider   = "llama"
-model_path = "/home/debian/models/bge-m3/bge-m3-Q4_K_M.gguf"
+model_path = "/home/rockylinux/models/bge-m3/bge-m3-Q4_K_M.gguf"
 api_key    = ""
 dimensions = 1024
 n_threads  = 4
