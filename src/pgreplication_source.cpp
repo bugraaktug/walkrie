@@ -45,8 +45,9 @@ std::string PgReplicationConfig::to_conninfo() const
     if (!password.empty()) {
         out << " password=" << password;
     }
+    out << tls.to_conninfo_fragment();
     out << " replication=database";
-    
+
     return out.str();
 }
 

@@ -313,6 +313,66 @@ TEST_SUITE("validate_configuration")
         auto errors = cfg.validate();
         CHECK(errors_contain(errors, "a valid sink type is required"));
     }
+
+    TEST_CASE("TlsConfig::validate() is a no-op when every field is left unset")
+    {
+        pgcdc::TlsConfig tls;
+        CHECK(tls.validate("[source][0]").empty());
+        CHECK(tls.to_conninfo_fragment().empty());
+    }
+
+    TEST_CASE("TlsConfig::validate() catches an unknown sslmode")
+    {
+        pgcdc::TlsConfig tls;
+        tls.sslmode = "verify-strict"; // not a real libpq sslmode value
+        CHECK(errors_contain(tls.validate("[source][0]"), "sslmode must be one of"));
+    }
+
+    TEST_CASE("TlsConfig::validate() catches sslcert set without sslkey")
+    {
+        pgcdc::TlsConfig tls;
+        tls.sslcert = "/etc/walkrie/tls/client.crt";
+        CHECK(errors_contain(tls.validate("[source][0]"), "sslcert and sslkey must both be set together"));
+    }
+
+    TEST_CASE("TlsConfig::validate() catches sslkey set without sslcert")
+    {
+        pgcdc::TlsConfig tls;
+        tls.sslkey = "/etc/walkrie/tls/client.key";
+        CHECK(errors_contain(tls.validate("[source][0]"), "sslcert and sslkey must both be set together"));
+    }
+
+    TEST_CASE("TlsConfig::validate() catches a missing sslrootcert file")
+    {
+        pgcdc::TlsConfig tls;
+        tls.sslrootcert = "/nonexistent/ca.pem";
+        CHECK(errors_contain(tls.validate("[source][0]"), "sslrootcert does not exist"));
+    }
+
+    TEST_CASE("TlsConfig::validate() accepts a fully populated mutual-TLS config")
+    {
+        namespace fs = std::filesystem;
+        fs::path dir = fs::temp_directory_path() / "walkrie_test_tls";
+        fs::create_directories(dir);
+        for (const auto* name : {"ca.pem", "client.crt", "client.key"}) {
+            std::ofstream f(dir / name);
+            f << "not a real cert but non-empty and readable";
+        }
+
+        pgcdc::TlsConfig tls;
+        tls.sslmode     = "verify-full";
+        tls.sslrootcert = (dir / "ca.pem").string();
+        tls.sslcert     = (dir / "client.crt").string();
+        tls.sslkey      = (dir / "client.key").string();
+
+        CHECK(tls.validate("[source][0]").empty());
+        CHECK(tls.to_conninfo_fragment() ==
+              " sslmode=verify-full sslrootcert=" + (dir / "ca.pem").string() +
+              " sslcert=" + (dir / "client.crt").string() +
+              " sslkey=" + (dir / "client.key").string());
+
+        fs::remove_all(dir);
+    }
 }
 
 namespace
@@ -367,5 +427,44 @@ TEST_SUITE("load_config parsing")
         )");
         REQUIRE(cfg.sources.size() == 1);
         CHECK(cfg.sources[0].backfill == false);
+    }
+
+    TEST_CASE("[[source]] tls fields are empty (undefined) when omitted")
+    {
+        auto cfg = load_config_from_toml(R"(
+            [[source]]
+            dbname = "testdb"
+            user   = "testuser"
+        )");
+        REQUIRE(cfg.sources.size() == 1);
+        const auto& tls = cfg.sources[0].tls;
+        CHECK(tls.sslmode.empty());
+        CHECK(tls.sslrootcert.empty());
+        CHECK(tls.sslcert.empty());
+        CHECK(tls.sslkey.empty());
+        CHECK(tls.sslpassword.empty());
+        CHECK(tls.to_conninfo_fragment().empty());
+        CHECK(tls.validate("[source][0]").empty());
+    }
+
+    TEST_CASE("[[source]] tls fields parse when present")
+    {
+        auto cfg = load_config_from_toml(R"(
+            [[source]]
+            dbname      = "testdb"
+            user        = "testuser"
+            sslmode     = "verify-full"
+            sslrootcert = "/etc/walkrie/tls/ca.pem"
+            sslcert     = "/etc/walkrie/tls/client.crt"
+            sslkey      = "/etc/walkrie/tls/client.key"
+            sslpassword = "keypass"
+        )");
+        REQUIRE(cfg.sources.size() == 1);
+        const auto& tls = cfg.sources[0].tls;
+        CHECK(tls.sslmode == "verify-full");
+        CHECK(tls.sslrootcert == "/etc/walkrie/tls/ca.pem");
+        CHECK(tls.sslcert == "/etc/walkrie/tls/client.crt");
+        CHECK(tls.sslkey == "/etc/walkrie/tls/client.key");
+        CHECK(tls.sslpassword == "keypass");
     }
 }

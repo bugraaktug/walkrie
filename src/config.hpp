@@ -3,9 +3,10 @@
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
+#include <sstream>
 #include <stdexcept>
 #include <string>
-#include <unistd.h>  
+#include <unistd.h>
 #include <vector>
 
 #include <toml.hpp>
@@ -28,6 +29,79 @@ struct AppSettings
     std::string backfill_dir     = "/var/lib/walkrie/backfill"; // <<< one SQLite file per source, named <slot_name>.sqlite3
 };
 
+// Sslcert/sslkey together enable mutual TLS (PG's "cert" auth method); 
+// sslmode alone (e.g. verify-full) with no client cert is server-verified TLS over the existing user/password auth
+struct TlsConfig
+{
+    std::string sslmode;       // disable | allow | prefer | require | verify-ca | verify-full
+    std::string sslrootcert;   // CA bundle used to verify the server's certificate
+    std::string sslcert;       // client certificate — sslkey must also be set
+    std::string sslkey;        // client private key — sslcert must also be set
+    std::string sslpassword;   // passphrase for an encrypted sslkey, if any
+
+    void load_from_toml(const toml::table* t)
+    {
+        auto str = [](const toml::table* t, const char* key, const std::string& def) -> std::string {
+            if (!t) return def;
+            auto v = t->get_as<std::string>(key);
+            return v ? **v : def;
+        };
+        sslmode     = str(t, "sslmode",     sslmode);
+        sslrootcert = str(t, "sslrootcert", sslrootcert);
+        sslcert     = str(t, "sslcert",     sslcert);
+        sslkey      = str(t, "sslkey",      sslkey);
+        sslpassword = str(t, "sslpassword", sslpassword);
+    }
+
+    std::string to_conninfo_fragment() const
+    {
+        std::ostringstream out;
+        if (!sslmode.empty())     out << " sslmode="     << sslmode;
+        if (!sslrootcert.empty()) out << " sslrootcert=" << sslrootcert;
+        if (!sslcert.empty())     out << " sslcert="     << sslcert;
+        if (!sslkey.empty())      out << " sslkey="      << sslkey;
+        if (!sslpassword.empty()) out << " sslpassword=" << sslpassword;
+        return out.str();
+    }
+
+    // context e.g. "[source][0]" or "[sink]" — prefixes every error message.
+    std::vector<std::string> validate(const std::string& context) const
+    {
+        std::vector<std::string> errors;
+
+        static const std::vector<std::string> valid_modes = {
+            "disable", "allow", "prefer", "require", "verify-ca", "verify-full"
+        };
+        if (!sslmode.empty() && std::find(valid_modes.begin(), valid_modes.end(), sslmode) == valid_modes.end()) {
+            errors.push_back(context + " sslmode must be one of: disable, allow, prefer, require, verify-ca, verify-full");
+        }
+
+        if (sslcert.empty() != sslkey.empty()) {
+            errors.push_back(context + " sslcert and sslkey must both be set together for client "
+                              "certificate authentication (or both left empty)");
+        }
+
+        auto check_file = [&](const std::string& path, const char* field) {
+            if (path.empty()) return;
+            namespace fs = std::filesystem;
+            std::error_code ec;
+            if (!fs::exists(path, ec)) {
+                errors.push_back(context + " " + field + " does not exist: '" + path + "'");
+            } else if (!fs::is_regular_file(path, ec)) {
+                errors.push_back(context + " " + field + " exists but is not a regular file: '" + path + "'");
+            } else if (access(path.c_str(), R_OK) != 0) {
+                errors.push_back(context + " " + field + " exists but is not readable by the current "
+                                  "user: '" + path + "'");
+            }
+        };
+        check_file(sslrootcert, "sslrootcert");
+        check_file(sslcert,     "sslcert");
+        check_file(sslkey,      "sslkey");
+
+        return errors;
+    }
+};
+
 struct SourceConfig
 {
     std::string host        = "localhost";
@@ -37,7 +111,8 @@ struct SourceConfig
     std::string password;
     std::string slot_name   = "pgcdc_slot";
     std::string publication = "pgcdc_pub";
-    bool        backfill    = false; // <<< scan pre-existing rows on first-ever slot creation; no effect on resume of an existing slot
+    bool        backfill    = false; // <<< scan pre-existing rows on first-ever slot creation
+    pgcdc::TlsConfig tls;
 };
 
 //   "id"       — primary key used as the upsert key in the sink table
@@ -138,6 +213,8 @@ struct AppConfig
 	        if (s.user.empty()) {
                 errors.push_back("[source][" + std::to_string(i) + "] user is required");
             }
+            auto tls_errors = s.tls.validate("[source][" + std::to_string(i) + "]");
+            errors.insert(errors.end(), tls_errors.begin(), tls_errors.end());
         }
 
         if (embedding.provider != "llama" && embedding.provider != "openai") {
@@ -289,6 +366,7 @@ inline AppConfig load_config(const std::string& path)
             	repl_cfg.slot_name   = str(s, "slot_name",   repl_cfg.slot_name);
             	repl_cfg.publication = str(s, "publication", repl_cfg.publication);
             	repl_cfg.backfill    = bl(s,  "backfill",    repl_cfg.backfill);
+            	repl_cfg.tls.load_from_toml(s);
 	        }
 	        cfg.sources.push_back(repl_cfg);
     	}

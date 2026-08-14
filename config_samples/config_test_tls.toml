@@ -1,0 +1,81 @@
+# TLS smoke-test config for both the [[source]] replication connection AND
+# the pgvector [[sink]] connection — see TECHNICAL.md's "TLS for Postgres
+# connections" section for the full sslmode/sslcert/sslkey/sslrootcert
+# reference. Verified end-to-end (source + sink, verify-full) against a real
+# hostssl-restricted Postgres instance.
+#
+# Targets 10.0.2.15 with sslmode = "verify-full" — the server's self-signed
+# cert is its own trust anchor, so sslrootcert points at the same file
+# Postgres itself serves (server.key never leaves the Postgres host).
+#
+# Server-side prerequisites this config assumes are already in place:
+#   - postgresql.conf: ssl = on, listen_addresses covering 10.0.2.15
+#   - pg_hba.conf:     hostssl all all 10.0.2.0/24 scram-sha-256
+#   - server.crt has a subjectAltName covering whatever host/IP you connect
+#     with (verify-full checks SAN, not just CN) — e.g.:
+#       openssl req -x509 -new -key server.key -out server.crt -days 1825 \
+#         -sha256 -subj "/CN=db.example.com" \
+#         -addext "subjectAltName=IP:10.0.2.15,DNS:localhost"
+#
+# Reuses the existing test_embeddings_dual table/mapping (same shape as
+# config_sample_pg_and_qdrant.toml's pgvector sink) so no schema setup is
+# needed beyond what's already there.
+#
+# Usage: ./walkrie -f -c /path/to/config_test_tls.toml
+#
+# Manual verification without walkrie at all, using the same TLS params:
+#   psql "host=10.0.2.15 dbname=qdb user=quser sslmode=verify-full \
+#         sslrootcert=/etc/postgresql/ssl/server.crt" \
+#     -c "SELECT ssl, version, cipher FROM pg_stat_ssl WHERE pid = pg_backend_pid();"
+
+[app]
+log_level = "debug"   # trace / debug / info / warn / error / critical
+log_file  = "/tmp/logs/walkrie.log"
+log_max_size_mb  = 10
+log_max_files    = 5
+
+[[source]]
+host        = "10.0.2.15"
+port        = "5432"
+dbname      = "qdb"
+user        = "quser"
+password    = "quser1234"
+slot_name   = "cdc_slot"
+publication = "test_pub"
+sslmode     = "verify-full"
+sslrootcert = "/etc/postgresql/ssl/server.crt"
+
+[[sink]]
+type        	= "pgvector"
+host        	= "10.0.2.15"
+port        	= "5432"
+dbname      	= "qdb"
+user        	= "quser"
+password    	= "quser1234"
+table       	= "public.test_embeddings_dual"
+embed_column	= "embedding"
+sslmode     	= "verify-full"
+sslrootcert 	= "/etc/postgresql/ssl/server.crt"
+
+ [[sink.table_mapping]]
+ source_table          = "test_table"
+ discriminator_column  = "category"
+ discriminator_label   = "test"
+
+    [[sink.table_mapping.columns]]
+    source_column = "id"
+    sink_column   = "item_id"
+    role          = "id"
+
+    [[sink.table_mapping.columns]]
+    source_column = "name"
+    sink_column   = "item_name"
+    role          = "embed"
+
+[embedding]
+provider   = "llama"
+model_path = "/home/rockylinux/models/bge-m3/bge-m3-Q4_K_M.gguf"
+api_key    = ""
+dimensions = 1024
+n_threads  = 4
+n_ctx      = 512

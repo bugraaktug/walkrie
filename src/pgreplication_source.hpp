@@ -11,6 +11,7 @@
 #include <event2/event.h>
 
 #include "backfill_util.hpp"
+#include "config.hpp"
 #include "pgoutput_parser.hpp"
 #include "replication_source.hpp"
 
@@ -25,6 +26,7 @@ struct PgReplicationConfig
     std::string password;
     std::string slot_name = "pgcdc_slot";
     std::string publication_name = "pgcdc_pub";
+    pgcdc::TlsConfig tls;
 
     bool                      backfill = false;
     std::vector<TableMapping> backfill_table_mappings; // <<< ignored unless backfill is true

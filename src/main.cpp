@@ -219,6 +219,7 @@ int main(int argc, char** argv)
     	src_config.slot_name        = src.slot_name;
     	src_config.publication_name = src.publication;
     	src_config.backfill         = src.backfill;
+    	src_config.tls              = src.tls;
     	if (src.backfill) {
     	    src_config.backfill_table_mappings = backfill_table_mappings;
     	    src_config.backfill_store_path     = cfg.settings.backfill_dir + "/" + src.slot_name + ".sqlite3";

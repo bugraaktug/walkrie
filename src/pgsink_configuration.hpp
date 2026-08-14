@@ -22,6 +22,7 @@ public:
     std::string table;
     std::string embedding_column;
     std::vector<TableMapping> table_mappings;
+    pgcdc::TlsConfig tls;
 
 };
 

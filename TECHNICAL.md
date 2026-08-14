@@ -22,6 +22,7 @@ This document describes the internal architecture of Walkrie's PostgreSQL-to-vec
   - Batching (`batch_size` / `batch_timeout_ms`)
   - [Multiple sources into one sink table (discriminator)](#multiple-sources-into-one-sink-table-discriminator)
   - [Multiple sink blocks](#multiple-sink-blocks)
+  - [TLS for Postgres connections](#tls-for-postgres-connections)
   - [Qdrant sink](#qdrant-sink)
   - [OpenAI provider](#openai-provider)
 - [Execution](#execution)
@@ -406,6 +407,43 @@ embed_column    = "embedding"
  discriminator_label  = "test"
  # ...
 ```
+
+### TLS for Postgres connections
+
+Both the `[[source]]` replication connection and the `pgvector` `[[sink]]` connection accept the same five optional TLS fields, parsed and validated once as a shared `TlsConfig` (`src/config.hpp`) and appended verbatim as libpq conninfo parameters — nothing here is Walkrie-specific, it's a thin pass-through to libpq's own `sslmode`/`sslcert`/`sslkey`/etc. semantics:
+
+```toml
+[[source]]
+host        = "10.0.2.15"
+port        = "5432"
+dbname      = "qdb"
+user        = "quser"
+password    = "quser1234"
+slot_name   = "cdc_slot"
+publication = "test_pub"
+sslmode     = "verify-full"                       # disable | allow | prefer | require | verify-ca | verify-full
+sslrootcert = "/etc/postgresql/ssl/server.crt"     # CA bundle verifying the server's cert
+# sslcert     = "/etc/walkrie/tls/client.crt"      # mutual TLS — must be set together with sslkey
+# sslkey      = "/etc/walkrie/tls/client.key"
+# sslpassword = "..."                              # only if sslkey is encrypted
+
+[[sink]]
+type        = "pgvector"
+host        = "10.0.2.15"
+# ... same host/port/dbname/user/password/table/embed_column as usual ...
+sslmode     = "verify-full"
+sslrootcert = "/etc/postgresql/ssl/server.crt"
+```
+
+All five fields are independently optional and additive-only — an entirely unset `tls` block produces the exact same conninfo string as before this feature existed (`TlsConfig::to_conninfo_fragment()` returns `""`), so existing `localhost`-style configs are unaffected and libpq's own default (`sslmode=prefer`) applies.
+
+**Two different thresholds, easy to conflate:**
+* **"Connection must be encrypted"** — satisfied by any `sslmode` other than `disable`/`allow`, or even by leaving `sslmode` unset entirely if the server offers TLS (libpq's default `prefer` negotiates it automatically). Needs no cert files at all. This is enough to satisfy a `hostssl` line in `pg_hba.conf` that doesn't also specify `clientcert=`.
+* **"Connection must verify the server's identity"** — only `sslmode = "verify-ca"` (chain only) or `"verify-full"` (chain + hostname/IP match against the cert's SAN) actually check who you're talking to. This is what needs `sslrootcert` — for a self-signed server cert, that's a copy of the server's own `server.crt`, since the cert is its own trust anchor. **The server cert needs a `subjectAltName` covering whatever host/IP you connect with** — `verify-full` fails hostname verification against a cert with only a CN and no SAN (see `openssl req -x509 ... -addext "subjectAltName=IP:10.0.2.15,DNS:localhost,..."`).
+
+**Validation** (`TlsConfig::validate()`, run for both `[[source]]` and the `pgvector` `[[sink]]`): rejects an `sslmode` outside libpq's six valid values, rejects `sslcert`/`sslkey` set without its pair (mutual TLS needs both or neither), and — matching the existing `model_path` checks' style — verifies `sslrootcert`/`sslcert`/`sslkey` each exist, are regular files, and are readable by the current user, all before the daemon starts rather than failing deep inside a libpq connect error.
+
+**Mutual TLS (`sslcert`/`sslkey`) is accepted and forwarded by Walkrie, but the client certificate is only actually checked if the *server's* `pg_hba.conf` line also requires it** (`hostssl ... clientcert=verify-full`, plus `ssl_ca_file` set server-side to the CA that signed the client cert) — Walkrie has no control over that half, it's standard Postgres server configuration. See `config_samples/config_test_tls.toml` for a working `verify-full` example (source + `pgvector` sink, self-signed CA) that was validated end-to-end against a `hostssl`-restricted Postgres instance.
 
 ### Qdrant sink
 

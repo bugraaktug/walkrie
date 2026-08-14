@@ -29,6 +29,7 @@ void PgSinkConfiguration::load_from_config(const toml::table& t)
     password = str_or(&t, "password", password);
     table    = str_or(&t, "table",    table);
     embedding_column = str_or(&t, "embed_column", embedding_column);
+    tls.load_from_toml(&t);
 
     if (auto req = t.get_as<bool>("required")) required_override = **req;
 
@@ -79,8 +80,12 @@ std::vector<std::string> PgSinkConfiguration::validate() const
     if (embedding_column.empty()) {
         errors.push_back("[sink] embedding column is required");
     }
-    if (table_mappings.empty())
+    if (table_mappings.empty()) {
         errors.push_back("[sink] at least one [[sink.table_mapping]] block is required");
+    }
+
+    auto tls_errors = tls.validate("[sink]");
+    errors.insert(errors.end(), tls_errors.begin(), tls_errors.end());
 
     for (const auto& tm : table_mappings) {
         if (tm.source_table.empty()) {
@@ -102,11 +107,12 @@ std::vector<std::string> PgSinkConfiguration::validate() const
 std::shared_ptr<EventSink> PgSinkConfiguration::create_sink(std::shared_ptr<EmbeddingProvider> provider) const
 {
     std::ostringstream conn;
-    conn << "host=" << host 
-         << " port=" << port 
+    conn << "host=" << host
+         << " port=" << port
          << " dbname=" << dbname
-         << " user=" << user 
-         << " password=" << password;
+         << " user=" << user
+         << " password=" << password
+         << tls.to_conninfo_fragment();
 
     PgEmbeddingSinkConfig sink_cfg;
     sink_cfg.pg_conninfo = conn.str();
