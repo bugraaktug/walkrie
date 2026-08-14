@@ -443,7 +443,37 @@ All five fields are independently optional and additive-only — an entirely uns
 
 **Validation** (`TlsConfig::validate()`, run for both `[[source]]` and the `pgvector` `[[sink]]`): rejects an `sslmode` outside libpq's six valid values, rejects `sslcert`/`sslkey` set without its pair (mutual TLS needs both or neither), and — matching the existing `model_path` checks' style — verifies `sslrootcert`/`sslcert`/`sslkey` each exist, are regular files, and are readable by the current user, all before the daemon starts rather than failing deep inside a libpq connect error.
 
-**Mutual TLS (`sslcert`/`sslkey`) is accepted and forwarded by Walkrie, but the client certificate is only actually checked if the *server's* `pg_hba.conf` line also requires it** (`hostssl ... clientcert=verify-full`, plus `ssl_ca_file` set server-side to the CA that signed the client cert) — Walkrie has no control over that half, it's standard Postgres server configuration. See `config_samples/config_test_tls.toml` for a working `verify-full` example (source + `pgvector` sink, self-signed CA) that was validated end-to-end against a `hostssl`-restricted Postgres instance.
+**Mutual TLS (`sslcert`/`sslkey`)** — Walkrie forwards the client cert unconditionally, but it's only actually checked if the *server's* `pg_hba.conf` line also requires it; Walkrie has no control over that half, it's standard Postgres server configuration:
+
+```bash
+# 1. A CA dedicated to signing client certs (kept separate from the
+#    server's own identity cert — the server doesn't need to trust
+#    its own cert to verify a client's).
+openssl req -x509 -new -newkey rsa:4096 -nodes -keyout ca.key -out ca.crt \
+  -days 3650 -sha256 -subj "/CN=Walkrie Client CA" \
+  -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign"
+
+# 2. Client cert — CN must exactly match the connecting Postgres role,
+#    since clientcert=verify-full checks CN against the username.
+openssl req -new -newkey rsa:2048 -nodes -keyout client.key -out client.csr -subj "/CN=quser"
+openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -out client.crt -days 1825 -sha256
+
+# 3. Server trusts that CA, and the hostssl line now demands a client cert
+#    (layered on top of scram-sha-256 — both a valid cert AND the password
+#    are required, not either/or):
+#      postgresql.conf: ssl_ca_file = '/etc/postgresql/ssl/ca.crt'
+#      pg_hba.conf:      hostssl all all 10.0.2.0/24 scram-sha-256 clientcert=verify-full
+```
+
+```toml
+sslmode     = "verify-full"
+sslrootcert = "/etc/postgresql/ssl/server.crt"    # verifies the SERVER
+sslcert     = "/etc/walkrie/tls/client.crt"       # Walkrie's identity — verified BY the server
+sslkey      = "/etc/walkrie/tls/client.key"
+```
+
+Verified end-to-end this way: with `clientcert=verify-full` set, a connection using only `sslrootcert` (no client cert) is rejected outright (`FATAL: connection requires a valid client certificate`); with all four fields set, `pg_stat_ssl.client_dn` on the server shows the verified client identity (`CN=quser`) for every connection Walkrie opens — both the `[[source]]` replication connection and the `pgvector` `[[sink]]` connection. See `config_samples/config_test_tls.toml` for the full working config.
 
 ### Qdrant sink
 

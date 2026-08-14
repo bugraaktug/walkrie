@@ -1,21 +1,23 @@
-# TLS smoke-test config for both the [[source]] replication connection AND
-# the pgvector [[sink]] connection — see TECHNICAL.md's "TLS for Postgres
+# Mutual TLS smoke-test config for both the [[source]] replication connection
+# AND the pgvector [[sink]] connection — see TECHNICAL.md's "TLS for Postgres
 # connections" section for the full sslmode/sslcert/sslkey/sslrootcert
-# reference. Verified end-to-end (source + sink, verify-full) against a real
-# hostssl-restricted Postgres instance.
+# reference. Verified end-to-end (source + sink, verify-full both directions)
+# against a real hostssl-restricted, clientcert-required Postgres instance.
 #
-# Targets 10.0.2.15 with sslmode = "verify-full" — the server's self-signed
-# cert is its own trust anchor, so sslrootcert points at the same file
-# Postgres itself serves (server.key never leaves the Postgres host).
+# Targets 10.0.2.15 with sslmode = "verify-full":
+#   - sslrootcert verifies the SERVER's identity — the server's self-signed
+#     cert is its own trust anchor, so this points at the same file
+#     Postgres itself serves (server.key never leaves the Postgres host).
+#   - sslcert/sslkey are Walkrie's CLIENT identity — a cert (CN=quser, must
+#     match the connecting role for clientcert=verify-full's username check)
+#     signed by a dedicated CA that the server is configured to trust.
 #
 # Server-side prerequisites this config assumes are already in place:
-#   - postgresql.conf: ssl = on, listen_addresses covering 10.0.2.15
-#   - pg_hba.conf:     hostssl all all 10.0.2.0/24 scram-sha-256
+#   - postgresql.conf: ssl = on, listen_addresses covering 10.0.2.15,
+#     ssl_ca_file pointing at the CA that signed the client cert
+#   - pg_hba.conf: hostssl all all 10.0.2.0/24 scram-sha-256 clientcert=verify-full
 #   - server.crt has a subjectAltName covering whatever host/IP you connect
-#     with (verify-full checks SAN, not just CN) — e.g.:
-#       openssl req -x509 -new -key server.key -out server.crt -days 1825 \
-#         -sha256 -subj "/CN=db.example.com" \
-#         -addext "subjectAltName=IP:10.0.2.15,DNS:localhost"
+#     with (verify-full checks SAN, not just CN)
 #
 # Reuses the existing test_embeddings_dual table/mapping (same shape as
 # config_sample_pg_and_qdrant.toml's pgvector sink) so no schema setup is
@@ -25,8 +27,9 @@
 #
 # Manual verification without walkrie at all, using the same TLS params:
 #   psql "host=10.0.2.15 dbname=qdb user=quser sslmode=verify-full \
-#         sslrootcert=/etc/postgresql/ssl/server.crt" \
-#     -c "SELECT ssl, version, cipher FROM pg_stat_ssl WHERE pid = pg_backend_pid();"
+#         sslrootcert=/etc/postgresql/ssl/server.crt \
+#         sslcert=/etc/walkrie/tls/client.crt sslkey=/etc/walkrie/tls/client.key" \
+#     -c "SELECT ssl, version, cipher, client_dn FROM pg_stat_ssl WHERE pid = pg_backend_pid();"
 
 [app]
 log_level = "debug"   # trace / debug / info / warn / error / critical
@@ -44,6 +47,8 @@ slot_name   = "cdc_slot"
 publication = "test_pub"
 sslmode     = "verify-full"
 sslrootcert = "/etc/postgresql/ssl/server.crt"
+sslcert     = "/etc/walkrie/tls/client.crt"
+sslkey      = "/etc/walkrie/tls/client.key"
 
 [[sink]]
 type        	= "pgvector"
@@ -56,6 +61,8 @@ table       	= "public.test_embeddings_dual"
 embed_column	= "embedding"
 sslmode     	= "verify-full"
 sslrootcert 	= "/etc/postgresql/ssl/server.crt"
+sslcert     	= "/etc/walkrie/tls/client.crt"
+sslkey      	= "/etc/walkrie/tls/client.key"
 
  [[sink.table_mapping]]
  source_table          = "test_table"
