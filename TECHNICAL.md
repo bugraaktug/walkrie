@@ -564,6 +564,8 @@ CREATE INDEX ON test_embeddings USING hnsw (embedding vector_cosine_ops);
 
 HNSW is recommended over IVFFlat for tables receiving continuous writes: IVFFlat's clustering is fixed at index-build time and degrades in recall quality as new data drifts from the original distribution, requiring periodic `REINDEX`. HNSW updates incrementally as rows are inserted, which matches Walkrie's continuous-write pattern.
 
+**Startup check (`PgEmbeddingSink::check_vector_index()`)** — advisory only, never blocks startup: queries `pg_index`/`pg_am` for an `hnsw`/`ivfflat` index on the sink column and logs what it finds. An index is named at `info` level (`vector index found on <table>.<column>: hnsw`); no index logs a `warn` noting queries will fall back to an exact sequential scan — phrased as a heads-up, not an error, since no index can be a deliberate choice (a small table, or an index planned after an initial backfill rather than paying incremental-build cost during it).
+
 ## Performance
 
 Benchmark methodology and results (lag, throughput, CPU/RAM) are tracked separately in [PERFORMANCE.md](./PERFORMANCE.md), including a breakdown of pipeline overhead vs. embedding provider latency across both local (Llama) and remote (OpenAI) providers, and separate sections on the Initial Backfill Scan's worker-scaling behavior (local Llama) and real end-to-end throughput (OpenAI).

@@ -62,8 +62,41 @@ void PgEmbeddingSink::init()
     }
 
     verify();
+    check_vector_index();
 
     spdlog::info("[PgEmbeddingSink] pg connection ok, pgvector present for {} table", config_.sink_table);
+}
+
+// Advisory only — never throws; a missing index may be intentional (flat/exact search).
+void PgEmbeddingSink::check_vector_index()
+{
+    const char* params[2] = { config_.sink_table.c_str(), config_.sink_column.c_str() };
+    PGresult* res = PQexecParams(pg_,
+        "SELECT am.amname FROM pg_index i "
+        "JOIN pg_class ic ON ic.oid = i.indexrelid "
+        "JOIN pg_am am ON am.oid = ic.relam "
+        "JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey) "
+        "WHERE i.indrelid = $1::regclass AND a.attname = $2 AND am.amname IN ('hnsw', 'ivfflat')",
+        2, nullptr, params, nullptr, nullptr, 0);
+
+    if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+        // Non-fatal lookup failure — don't block startup over an advisory check.
+        spdlog::debug("[PgEmbeddingSink] could not check for a vector index on {}.{}: {}",
+                      config_.sink_table, config_.sink_column, PQerrorMessage(pg_));
+        PQclear(res);
+        return;
+    }
+
+    if (PQntuples(res) > 0) {
+        spdlog::info("[PgEmbeddingSink] vector index found on {}.{}: {}",
+                     config_.sink_table, config_.sink_column, PQgetvalue(res, 0, 0));
+    } else {
+        spdlog::warn("[PgEmbeddingSink] no hnsw/ivfflat index found on {}.{} — similarity queries "
+                     "will do an exact (sequential-scan) search. This may be intentional (small "
+                     "table, or an index planned after an initial backfill).",
+                     config_.sink_table, config_.sink_column);
+    }
+    PQclear(res);
 }
 
 void PgEmbeddingSink::verify()

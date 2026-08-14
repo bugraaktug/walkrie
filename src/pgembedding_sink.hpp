@@ -58,6 +58,7 @@ private:
     std::optional<BatchEvent> prepare_upsert(const TableMapping& tm,
                                              const ChangeEvent& event);
     void verify();
+    void check_vector_index();
     static std::string get_column(const DecodedRow& row, const std::string& col_name);
     static bool is_toast(const DecodedRow& row, const std::string& col_name);
 };

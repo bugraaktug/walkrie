@@ -37,8 +37,7 @@ Like any logical-replication consumer (Debezium included), Walkrie's replication
 ## Roadmap
 
 * Benchmark local Llama batching and GPU offload across more hardware — results vary significantly by machine so far (see PERFORMANCE.md), and more data points are needed before drawing firm conclusions.
-* Vector index management helpers (HNSW index creation/verification on sink tables).
-* Multi-threaded embedding worker pool (multiple `llama_context` instances sharing one loaded model) to use more available CPU cores concurrently.
+* Multi-threaded embedding worker pool (multiple `llama_context` instances sharing one loaded model) — unverified: needs hardware with CPU cores to spare beyond what a single `embed()` call's `n_threads` already consumes to show a real throughput gain rather than just thread contention. Mainly a memory win over today's separate-process approach (one shared model load instead of N) until benchmarked on suitable hardware.
 
 ## Target Customers
 
