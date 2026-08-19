@@ -160,4 +160,3 @@ Developed with AI assistance via [Claude Code](https://claude.com/claude-code).
 
 ---
 
-Built by a solo developer for engineers who care about mechanical sympathy.
