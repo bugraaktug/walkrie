@@ -112,6 +112,8 @@ add_library(walkrie_core STATIC
     src/jsonsink_configuration.cpp
     src/qdrantsink_configuration.cpp
     src/qdrant_sink.cpp
+    src/milvussink_configuration.cpp
+    src/milvus_sink.cpp
     src/pgoutput_parser.cpp
     src/pgreplication_source.cpp
     src/llama_provider.cpp
@@ -170,6 +172,7 @@ add_executable(walkrie_tests
     src/tests/test_config.cpp
     src/tests/test_config_model.cpp
     src/tests/test_qdrant_sink_configuration.cpp
+    src/tests/test_milvus_sink_configuration.cpp
     src/tests/test_caching_embedding_provider.cpp
     src/tests/test_upsert_sql.cpp
     src/tests/test_xframe_log.cpp
@@ -205,6 +208,13 @@ add_executable(test_dual_sink_pg_qdrant
 target_include_directories(test_dual_sink_pg_qdrant PRIVATE
     src src/include src/third_party)
 target_link_libraries(test_dual_sink_pg_qdrant PRIVATE
+    walkrie_core)
+
+add_executable(test_milvus_sink
+    src/tests/integration/test_milvus_sink.cpp)
+target_include_directories(test_milvus_sink PRIVATE
+    src src/include src/third_party)
+target_link_libraries(test_milvus_sink PRIVATE
     walkrie_core)
 
 add_executable(test_sink_dims_check

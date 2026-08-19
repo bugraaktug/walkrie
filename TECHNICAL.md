@@ -24,6 +24,7 @@ This document describes the internal architecture of Walkrie's PostgreSQL-to-vec
   - [Multiple sink blocks](#multiple-sink-blocks)
   - [TLS for Postgres connections](#tls-for-postgres-connections)
   - [Qdrant sink](#qdrant-sink)
+  - [Milvus sink](#milvus-sink)
   - [OpenAI provider](#openai-provider)
 - [Execution](#execution)
 - [Testing](#testing)
@@ -93,8 +94,9 @@ The diagram above shows the forward (decode → sink) path only; there is also a
 * **Upsert-based writes** — sink writes use `INSERT ... ON CONFLICT (id) DO UPDATE`, making replays and reconnects safe without manual deduplication.
 * **Skip-unchanged updates** — on `Update` events, `PgEmbeddingSink` skips the embedding call entirely if the embed column is TOAST-unchanged or textually identical to the prior value, avoiding unnecessary embedding cost on updates that didn't touch the embedded field. This check applies identically whether an event arrives via the single-event or batched path.
 * **Pluggable embedding providers** — a common `EmbeddingProvider` interface abstracts over local (`llama.cpp`) and remote (OpenAI HTTP API) backends; new providers implement `init()`, `embed()`, `dimensions()`, and `name()`. Providers additionally expose `embed_batch()`, defaulting to a loop over `embed()` for providers that haven't implemented real batching — `OpenAIProvider` overrides this with a genuine single-request batched call (`"input": [text1, text2, ...]`); `LlamaProvider` now overrides it too, with a real multi-sequence `llama_encode()` call (see Known Limitations below for the measured performance and correctness findings).
-* **Pluggable sink types** — a `SinkConfiguration` interface (`pgvector`, `qdrant`, `json-output`) allows multiple sink blocks in one config, each independently constructing and owning its runtime `EventSink`. `EventSink` similarly exposes `call_batch()`, defaulting to a loop over `call()`; `PgEmbeddingSink` and `QdrantSink` override it with real batching (below).
+* **Pluggable sink types** — a `SinkConfiguration` interface (`pgvector`, `qdrant`, `milvus`, `json-output`) allows multiple sink blocks in one config, each independently constructing and owning its runtime `EventSink`. `EventSink` similarly exposes `call_batch()`, defaulting to a loop over `call()`; `PgEmbeddingSink`, `QdrantSink`, and `MilvusSink` override it with real batching (below).
 * **`QdrantSink`** (`src/qdrant_sink.hpp/cpp`) — REST-only via `HttpClient`, sharing the same two-pass `call_batch()` pattern as `PgEmbeddingSink` (validate everything, one `embed_batch()` call, then apply upserts/deletes/truncate in original event order — see the ordering note below, which applies identically here). Qdrant point ids must be a `uint64` or UUID, so source ids are mapped through a fixed-namespace UUIDv5 (`point_id_for()`); the namespace constant is permanent, since changing it would remap every existing point. All writes use `?wait=true` so the durable-write guarantee `EventDispatcher`'s LSN confirmation relies on holds the same way it does for `pgvector`. `QdrantSink::init()` is verify-only — it checks the collection exists and its vector size matches the embedding provider's `dimensions()`, but never auto-creates a collection (matching `pgvector`'s "Walkrie never `CREATE TABLE`s" philosophy) — create/tune the collection (HNSW params, distance metric, quantization) yourself first. A `pgvector` sink and a `qdrant` sink can be configured together in the same `[[sink]]` list (dual-write) — see "Qdrant sink" under Configuration Syntax below.
+* **`MilvusSink`** (`src/milvus_sink.hpp/cpp`) — same REST-only, two-pass `call_batch()` pattern, over Milvus's REST API v2. Unlike Qdrant's fixed vector slot, `init()` auto-discovers the collection's actual primary-key and vector field names/types via `describe collection` (also checking vector dim against the provider) — nothing to configure for them. Source ids are hashed the same way as `QdrantSink::point_id_for()` (fixed-namespace UUIDv5, truncated to a masked non-negative `int64` when the pk is `Int64` rather than `VarChar`) — this exists specifically because Milvus's REST delete only takes a `filter` boolean-expression string with no id-array form, so a raw id would need escaping there otherwise. The `id`/`embed` table-mapping roles name *separate* scalar fields holding the readable source id/text (mirrors Qdrant's payload), and `init()` rejects a config where those collide with the auto-discovered pk/vector fields. One real gotcha found verifying this against a live Milvus 2.6.18 instance: an empty `filter` (documented as Milvus's "match everything" shorthand) is rejected by delete on that server — `truncate()`'s no-discriminator path uses a pk-type-generic always-true expression instead. See "Milvus sink" under Configuration Syntax below.
 * **Batched upsert ordering (`PgEmbeddingSink::call_batch`)** — validates every event in a batch first (skip-unchanged checks, null/empty-field checks — no database writes yet), collects everything needing an embedding into one `embed_batch()` call, then applies every resulting action (upserts *and* deletes) in a second pass, strictly preserving the batch's original event order. This ordering guarantee matters concretely: if an insert and a delete for the same row land in the same batch, applying them out of original order (e.g. running the delete immediately during validation, before a same-batch insert has been upserted) can silently resurrect a row that should have ended up deleted. The two-pass design exists specifically to prevent that. Covered by both a unit test (`test_pgembedding_sink_batch_ordering.cpp`) and a live-database integration test (see Testing below).
 * **`TRUNCATE` handling** — a `Truncate` event runs a bulk `DELETE` against the sink table instead of the per-row keyed delete used for `Delete` events, since a truncated source table carries no row identifiers to key off. When the table mapping has a `discriminator_column` configured, the delete is scoped to that mapping's `discriminator_label` (`DELETE FROM <sink> WHERE <discriminator> = <label>`); without one, there is no column that identifies which sink rows came from which source table, so the delete has no `WHERE` clause at all and removes every row in the sink table — logged as a warning at execution time. `TRUNCATE ... CASCADE` on a watched table's dependents is handled the same way, one bulk delete per relation named in the WAL message (see Decode Layer above). Same two-pass ordering as upserts/deletes: a truncate is applied at its original position in the batch, not deferred or reordered relative to same-batch inserts/deletes for other tables.
 
@@ -510,6 +512,34 @@ collection = "test_embeddings"
 
 **Dual-write to `pgvector` and `qdrant`** — declare both as separate `[[sink]]` blocks in the same config; both are driven off one shared `EmbeddingProvider` instance (wrapped in a `CachingEmbeddingProvider`, `src/caching_embedding_provider.hpp/cpp`, a 64-entry LRU decorator) so a row shared by both sinks' mappings is embedded once, not twice, per batch. See `config_samples/config_sample_pg_and_qdrant.toml` for a full two-sink example.
 
+### Milvus sink
+
+The Milvus collection must exist before Walkrie starts, with its primary-key and vector fields already defined — `MilvusSink::init()` verifies the collection, auto-discovers those two fields by inspecting the schema, and checks the vector field's dim; it does not auto-create a collection. See `config_samples/config_sample_milvus.toml` for a full `pymilvus` collection-creation snippet.
+
+```toml
+[[sink]]
+type       = "milvus"
+url        = "http://localhost:19530"
+token      = ""                # optional; "user:pass" or an API key
+db_name    = ""                # optional; server default db used when empty
+collection = "test_embeddings"
+
+ [[sink.table_mapping]]
+ source_table = "test_table"
+
+    [[sink.table_mapping.columns]]
+    source_column = "id"
+    sink_column   = "item_id"    # a scalar field distinct from the collection's pk field
+    role          = "id"
+
+    [[sink.table_mapping.columns]]
+    source_column = "name"
+    sink_column   = "item_name"  # a scalar field distinct from the collection's vector field
+    role          = "embed"
+```
+
+Same `table_mapping`/`columns`/`discriminator_column`/`discriminator_label`/`batch_size`/`required` config surface as `qdrant`. The `id`/`embed` sink_columns hold the *readable* source id/text — the collection's actual primary-key and vector fields are found automatically and always carry the hashed row id and the embedding, never something you name in config; `init()` rejects a `sink_column` that collides with either. Dual-write with `pgvector`/`qdrant` works the same way as above (one shared, deduped `EmbeddingProvider`).
+
 ### OpenAI provider
 
 ```toml
@@ -567,8 +597,11 @@ Full scenario-by-scenario write-up for `test_sink_batch_mode`, `test_qdrant_sink
 ./test_sink_dims_check <config.toml> --conninfo "<pg conninfo>"
 ./test_qdrant_sink <config.toml>
 ./test_dual_sink_pg_qdrant [<config.toml>]
+./test_milvus_sink <config.toml>
 ./test_backfill_dump <config.toml> [--slot NAME] [--publication NAME] [--table NAME] [--conninfo "<pg conninfo>"]
 ```
+
+`test_milvus_sink` mirrors `test_qdrant_sink`'s scenarios (batching/ordering, unchanged-update skip, discriminator-scoped truncate/id-collision) against a live Milvus instance, driving `MilvusSink` directly — its three `walkrie_it_milvus_*` collections must exist first (schema snippet in the test file's header comment; no auto-create, same as production).
 
 `test_lsn_confirm` verifies the LSN-correctness fix described in the Decode Layer section above, directly against a live Postgres: it drives the real `PgReplicationSource` through one transaction on a dedicated table/publication/slot (`walkrie_it_lsn_*`, dropped and recreated each run so it never collides with a real running instance), waits for the `Op::Commit` marker, confirms it exactly as `EventDispatcher` would after a successful sink write, calls `flush_confirmed_lsn()` (the same call `main.cpp` makes on shutdown), and asserts `pg_replication_slots.confirmed_flush_lsn` reaches that transaction's real commit LSN — the exact invariant that prevents the replay-on-restart bug. Includes a "before" sanity check (the confirmed position is still behind the commit LSN prior to the flush call) so the main assertion isn't vacuous. Uses the `[[source]]` block from the given config (host/port/dbname/user/password), not `--conninfo`, since the test exercises actual replication-slot mechanics.
 
