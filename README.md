@@ -30,6 +30,7 @@ Like any logical-replication consumer (Debezium included), Walkrie's replication
 * **Milvus sink** — same idea over Milvus's REST API v2, dual-write-compatible with `pgvector`/`qdrant`. The collection's primary-key and vector fields are auto-discovered at startup rather than configured; source ids are hashed the same way as the Qdrant sink. See TECHNICAL.md for config and details.
 * **Optional event batching** — group multiple change events into a single embedding call instead of one call per row (`batch_size`/`batch_timeout_ms` in config, off by default). Throughput effect is provider- and hardware-dependent — see PERFORMANCE.md for measured numbers before enabling in production.
 * **Optional GPU offload for the local Llama provider** (`n_gpu_layers` in config, requires building with `-DGGML_CUDA=ON`) — offload model layers to a CUDA GPU. Whether this helps depends on your hardware and whether batching is also enabled — see PERFORMANCE.md.
+* **LoRA adapter support for the local Llama provider** (`lora_path`/`lora_scale` in config) — load a task-specific LoRA adapter alongside the base GGUF model, for instruction-tuned multilingual models like `jina-embeddings-v3` that split retrieval-query vs. retrieval-passage behavior into separate adapter files. See TECHNICAL.md for config details and the multilingual e-commerce demo below for a full worked example.
 * **Initial backfill scan for pre-existing rows** (`backfill = true` per `[[source]]`) — scans and embeds rows that already existed in a mapped table when its replication slot was first created, without pausing live streaming, and resumes cleanly across a crash. See TECHNICAL.md for the design.
 * **Upsert-based sink writes** — idempotent by design; replays and reconnects don't duplicate rows.
 * **Config validation at startup** — required fields, embedding provider settings, and (for the local Llama provider) the model file's existence, type, readability, and non-zero size are all checked before the daemon starts, so misconfiguration produces a clear error message instead of a crash loop.
@@ -136,16 +137,19 @@ docker run --rm \
 Walkrie runs entirely within your own infrastructure. Database credentials, replicated data, and schema details stay local to wherever you deploy the binary — nothing is sent to any third party.
 If you configure the OpenAI embedding provider, only the specific text fields you've mapped for embedding are sent to OpenAI's API, under OpenAI's own data handling terms — Walkrie itself does not collect or transmit any data.
 
-## Try It: CV Search Demo
+## Try It: Search Demos
 
 The fastest way to see walkrie actually work — not just read about it — is
-the worked example in [`demo/`](./demo/README.md): seed a Postgres table
-with synthetic CVs, run walkrie against it with local (offline) embeddings
-(including an initial backfill of the pre-existing rows), and query them
-with a small hybrid semantic + SQL search CLI. It walks through every
-step, including the couple of Postgres/backfill gotchas that trip people
-up on a first run, and ends with inserting a live row and watching it show
-up in search results with no batch job or manual sync step.
+one of the worked examples in [`demo/`](./demo/README.md): seed a Postgres
+table, run walkrie against it with local (offline) embeddings (including an
+initial backfill of the pre-existing rows), and query it with a small
+hybrid semantic + SQL search CLI. Both walk through every step, including
+the couple of Postgres/backfill gotchas that trip people up on a first run,
+and end with inserting a live row and watching it show up in search results
+with no batch job or manual sync step.
+
+* **[CV / HR search](./demo/README.md)** — synthetic English CVs, `BGE-M3`.
+* **[Multilingual e-commerce search](./demo/README_ecommerce.md)** — synthetic Japanese/Turkish product catalog, `jina-embeddings-v3` with LoRA task adapters (see the LoRA feature above) — a concrete example of embedding languages other than English.
 
 ## License
 
