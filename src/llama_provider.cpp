@@ -10,12 +10,15 @@ namespace pgcdc {
 
 LlamaProvider::LlamaProvider(const EmbeddingConfig& cfg)
     : model_path_(cfg.model_path)
+    , lora_path_(cfg.lora_path)
+    , lora_scale_(cfg.lora_scale)
     , n_threads_(cfg.n_threads)
     , n_ctx_(cfg.n_ctx)
     , n_batch_(cfg.max_batch_size)
     , n_gpu_layers_(cfg.n_gpu_layers) {}
 
 LlamaProvider::~LlamaProvider() {
+    if (lora_)  llama_adapter_lora_free(lora_);
     if (ctx_)   llama_free(ctx_);
     if (model_) llama_model_free(model_);
     llama_backend_free();
@@ -76,6 +79,33 @@ void LlamaProvider::init()
         throw std::runtime_error("LlamaProvider: failed to create llama context");
     }
 
+    if (!lora_path_.empty()) {
+        lora_ = llama_adapter_lora_init(model_, lora_path_.c_str());
+        if (!lora_) {
+            throw std::runtime_error(
+                "LlamaProvider: failed to load LoRA adapter from '" + lora_path_ + "' — "
+                "check that the path exists, is a valid LoRA GGUF, and matches this model's architecture");
+        }
+        llama_adapter_lora* adapters[] = { lora_ };
+        float scales[] = { lora_scale_ };
+        if (llama_set_adapters_lora(ctx_, adapters, 1, scales) != 0) {
+            throw std::runtime_error(
+                "LlamaProvider: failed to activate LoRA adapter '" + lora_path_ + "' on the llama context");
+        }
+        spdlog::info("[LlamaProvider] activated LoRA adapter {} (scale={})", lora_path_, lora_scale_);
+
+        char prefix_buf[512]; // <<< read from the adapter itself so it can't drift out of sync with the loaded file
+        int32_t prefix_len = llama_adapter_meta_val_str(lora_, "adapter.lora.prompt_prefix",
+                                                          prefix_buf, sizeof(prefix_buf));
+        if (prefix_len > 0) {
+            if (static_cast<size_t>(prefix_len) >= sizeof(prefix_buf)) {
+                spdlog::warn("[LlamaProvider] adapter prompt_prefix ({} bytes) exceeds buffer, truncated", prefix_len);
+            }
+            text_prefix_ = std::string(prefix_buf);
+            spdlog::info("[LlamaProvider] applying LoRA adapter prompt prefix: \"{}\"", text_prefix_);
+        }
+    }
+
     spdlog::info("[LlamaProvider] loaded {} ({} dims)", model_path_, dimensions());
     spdlog::info("[LlamaProvider] ACTUAL ctx_ config: "
              "n_ctx={} n_batch={} n_ubatch={} n_seq_max={} n_gpu_layers_requested={} model_n_layer={}",
@@ -95,10 +125,11 @@ std::vector<LlamaTokenizedText> LlamaProvider::tokenize_batch(const std::vector<
 
         std::vector<llama_token> temp_tokens(static_cast<size_t>(n_ctx_));
 
+        const std::string prefixed_text = text_prefix_ + texts[i]; // <<< no-op concat when text_prefix_ is empty
         int n_tokens = llama_tokenize(
             vocab_,
-            texts[i].c_str(),
-            static_cast<int32_t>(texts[i].size()),
+            prefixed_text.c_str(),
+            static_cast<int32_t>(prefixed_text.size()),
             temp_tokens.data(),
             static_cast<int32_t>(temp_tokens.size()),
             /*add_special=*/true,

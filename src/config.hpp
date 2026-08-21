@@ -161,6 +161,8 @@ struct EmbeddingConfig
     std::string model;			            // required for openai; ignored for llama
     std::string model_path;                 // required for llama; ignored for openai
     std::string api_key;                    // required for openai; ignored for llama
+    std::string lora_path;                  // optional llama.cpp LoRA adapter GGUF; ignored for openai
+    float       lora_scale      = 1.0f;     // LoRA adapter scale; ignored if lora_path is empty
     int         dimensions      = 1024;     // must match model output + pgvector column
     int         n_threads       = 4;        // llama.cpp CPU threads
     int         n_ctx           = 512;      // llama.cpp context window
@@ -275,6 +277,29 @@ struct AppConfig
                 }
                 // embedding.validate == "none": skip the check entirely — the file is never opened.
             }
+
+            if (!embedding.lora_path.empty()) {
+                namespace fs = std::filesystem;
+                std::error_code ec;
+
+                if (!fs::exists(embedding.lora_path, ec)) {
+                    errors.push_back("[embedding] lora_path does not exist: '" +
+                                    embedding.lora_path + "' — place the LoRA adapter GGUF at this "
+                                    "path or remove lora_path to run without an adapter");
+                } else if (!fs::is_regular_file(embedding.lora_path, ec)) {
+                    errors.push_back("[embedding] lora_path exists but is not a regular file: '" +
+                                    embedding.lora_path + "'");
+                } else if (access(embedding.lora_path.c_str(), R_OK) != 0) {
+                    errors.push_back("[embedding] lora_path exists but is not readable by the "
+                                    "current user: '" + embedding.lora_path +
+                                    "' — check file ownership/permissions (the walkrie service "
+                                    "runs as the 'walkrie' system user)");
+                } else if (fs::file_size(embedding.lora_path, ec) == 0) {
+                    errors.push_back("[embedding] lora_path points to an empty (0-byte) file: '" +
+                                    embedding.lora_path + "' — the download may have failed or "
+                                    "been interrupted");
+                }
+            }
 	        if (embedding.dimensions <= 0) {
                 errors.push_back("[embedding] dimensions must be > 0");
             }
@@ -343,6 +368,12 @@ inline AppConfig load_config(const std::string& path)
         auto v = t->get_as<bool>(key);
         return v ? **v : def;
     };
+    auto f32 = [](const toml::table* t, const char* key, float def) -> float {
+        if (!t)
+	        return def;
+        auto v = t->get_as<double>(key);
+        return v ? static_cast<float>(**v) : def;
+    };
 
     if (auto* a = tbl["app"].as_table()) {
         cfg.settings.log_level          = str(a, "log_level",       cfg.settings.log_level);
@@ -388,6 +419,8 @@ inline AppConfig load_config(const std::string& path)
         cfg.embedding.model       = str(e, "model",        cfg.embedding.model);
         cfg.embedding.model_path  = str(e, "model_path",   cfg.embedding.model_path);
         cfg.embedding.api_key     = str(e, "api_key",      cfg.embedding.api_key);
+        cfg.embedding.lora_path   = str(e, "lora_path",    cfg.embedding.lora_path);
+        cfg.embedding.lora_scale  = f32(e, "lora_scale",   cfg.embedding.lora_scale);
         cfg.embedding.dimensions  = i32(e, "dimensions",   cfg.embedding.dimensions);
         cfg.embedding.n_threads   = i32(e, "n_threads",    cfg.embedding.n_threads);
         cfg.embedding.n_ctx       = i32(e, "n_ctx",        cfg.embedding.n_ctx);

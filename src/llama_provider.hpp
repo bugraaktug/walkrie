@@ -55,14 +55,18 @@ protected:
 
 private:
     std::string model_path_;
+    std::string lora_path_;
+    float       lora_scale_;
+    std::string text_prefix_;  // from the LoRA adapter's "adapter.lora.prompt_prefix" metadata, if any
     int         n_threads_;
     int         n_ctx_;
     int         n_batch_;
     int         n_gpu_layers_;
 
-    llama_model*   model_ = nullptr;
-    llama_context* ctx_   = nullptr;
-    const llama_vocab* vocab_ = nullptr;
+    llama_model*        model_ = nullptr;
+    llama_context*       ctx_  = nullptr;
+    const llama_vocab*  vocab_ = nullptr;
+    llama_adapter_lora*  lora_ = nullptr;
     
     std::mutex ctx_mutex_;  // For thread safety
 };

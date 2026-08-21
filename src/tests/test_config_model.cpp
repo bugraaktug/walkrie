@@ -271,3 +271,91 @@ TEST_SUITE("AppConfig::validate - [embedding] validate severity (GGUF dims check
         fs::remove(file);
     }
 }
+
+TEST_SUITE("AppConfig::validate - embedding lora_path checks")
+{
+
+    TEST_CASE("empty lora_path is optional and passes validation")
+    {
+        auto cfg = make_minimal_valid_config();
+        cfg.embedding.lora_path = "";
+
+        auto errors = cfg.validate();
+        CHECK(!errors_contain(errors, "lora_path"));
+    }
+
+    TEST_CASE("nonexistent lora_path fails validation")
+    {
+        auto cfg = make_minimal_valid_config();
+        cfg.embedding.lora_path = "/tmp/walkrie_test_lora_definitely_does_not_exist_12345.gguf";
+
+        auto errors = cfg.validate();
+        CHECK(errors_contain(errors, "lora_path does not exist"));
+    }
+
+    TEST_CASE("directory instead of file fails lora_path validation")
+    {
+        auto cfg = make_minimal_valid_config();
+        fs::path dir = fs::temp_directory_path() / "walkrie_test_lora_dir";
+        fs::create_directories(dir);
+        cfg.embedding.lora_path = dir.string();
+
+        auto errors = cfg.validate();
+        CHECK(errors_contain(errors, "lora_path exists but is not a regular file"));
+
+        fs::remove_all(dir);
+    }
+
+    TEST_CASE("unreadable lora_path fails validation")
+    {
+        auto cfg = make_minimal_valid_config();
+        fs::path file = fs::temp_directory_path() / "walkrie_test_lora_unreadable.gguf";
+        {
+            std::ofstream f(file);
+            f << "fake lora adapter content";
+        }
+        fs::permissions(file, fs::perms::none);
+        cfg.embedding.lora_path = file.string();
+
+        auto errors = cfg.validate();
+
+        // Same root-bypass caveat as the model_path unreadable-file test above.
+        if (geteuid() != 0) {
+            CHECK(errors_contain(errors, "lora_path exists but is not readable"));
+        } else {
+            MESSAGE("skipped: running as root, permission check cannot be exercised");
+        }
+
+        fs::permissions(file, fs::perms::owner_all);
+        fs::remove(file);
+    }
+
+    TEST_CASE("empty (0-byte) lora_path fails validation")
+    {
+        auto cfg = make_minimal_valid_config();
+        fs::path file = fs::temp_directory_path() / "walkrie_test_lora_empty.gguf";
+        { std::ofstream f(file); } // create, write nothing
+
+        cfg.embedding.lora_path = file.string();
+        auto errors = cfg.validate();
+        CHECK(errors_contain(errors, "lora_path points to an empty (0-byte) file"));
+
+        fs::remove(file);
+    }
+
+    TEST_CASE("valid, readable, non-empty lora_path passes validation")
+    {
+        auto cfg = make_minimal_valid_config();
+        fs::path file = fs::temp_directory_path() / "walkrie_test_lora_valid.gguf";
+        {
+            std::ofstream f(file);
+            f << "not a real gguf but non-empty and readable";
+        }
+
+        cfg.embedding.lora_path = file.string();
+        auto errors = cfg.validate();
+        CHECK(!errors_contain(errors, "lora_path"));
+
+        fs::remove(file);
+    }
+}

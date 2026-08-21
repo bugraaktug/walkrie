@@ -467,4 +467,28 @@ TEST_SUITE("load_config parsing")
         CHECK(tls.sslkey == "/etc/walkrie/tls/client.key");
         CHECK(tls.sslpassword == "keypass");
     }
+
+    TEST_CASE("[embedding] lora_path defaults empty and lora_scale defaults to 1.0 when omitted")
+    {
+        auto cfg = load_config_from_toml(R"(
+            [embedding]
+            provider   = "llama"
+            model_path = "/opt/models/model.gguf"
+        )");
+        CHECK(cfg.embedding.lora_path.empty());
+        CHECK(cfg.embedding.lora_scale == doctest::Approx(1.0f));
+    }
+
+    TEST_CASE("[embedding] lora_path and lora_scale parse when present")
+    {
+        auto cfg = load_config_from_toml(R"(
+            [embedding]
+            provider    = "llama"
+            model_path  = "/opt/models/model.gguf"
+            lora_path   = "/opt/models/lora-retrieval.passage.gguf"
+            lora_scale  = 0.5
+        )");
+        CHECK(cfg.embedding.lora_path == "/opt/models/lora-retrieval.passage.gguf");
+        CHECK(cfg.embedding.lora_scale == doctest::Approx(0.5f));
+    }
 }

@@ -1,0 +1,83 @@
+[app]
+log_level        = "debug"
+log_file         = "/tmp/logs/walkrie_ecommerce.log"
+log_max_size_mb  = 10
+log_max_files    = 5
+backfill_dir     = "/tmp/walkrie_backfill_ecommerce"  # default is /var/lib/walkrie/backfill, only writable under the packaged install
+batch_size       = 20
+batch_timeout_ms = 50
+
+[[source]]
+host        = "localhost"
+port        = "5432"
+dbname      = "ecommerce_demo"
+user        = "walkrie_demo"
+password    = "walkrie"
+slot_name   = "product_cdc_slot"
+publication = "product_pub"
+backfill    = true
+
+[[sink]]
+type         = "pgvector"
+host         = "localhost"
+port         = "5432"
+dbname       = "ecommerce_demo"
+user         = "walkrie_demo"
+password     = "walkrie"
+table        = "public.product_search"
+embed_column = "embedding"
+
+ [[sink.table_mapping]]
+ source_table = "products"
+
+    [[sink.table_mapping.columns]]
+    source_column = "id"
+    sink_column   = "product_id"
+    role          = "id"
+
+    [[sink.table_mapping.columns]]
+    source_column = "sku"
+    sink_column   = "sku"
+    role          = "metadata"
+
+    [[sink.table_mapping.columns]]
+    source_column = "title"
+    sink_column   = "title"
+    role          = "metadata"
+
+    [[sink.table_mapping.columns]]
+    source_column = "category"
+    sink_column   = "category"
+    role          = "metadata"
+
+    [[sink.table_mapping.columns]]
+    source_column = "language"
+    sink_column   = "language"
+    role          = "metadata"
+
+    [[sink.table_mapping.columns]]
+    source_column = "price"
+    sink_column   = "price"
+    role          = "metadata"
+
+    [[sink.table_mapping.columns]]
+    source_column = "currency"
+    sink_column   = "currency"
+    role          = "metadata"
+
+    [[sink.table_mapping.columns]]
+    source_column = "description"
+    sink_column   = "description"
+    role          = "embed"
+
+[embedding]
+provider   = "llama"
+model_path = "/home/debian/models/jina-embeddings-v3/jina-embeddings-v3-Q4_K_M.gguf"
+# retrieval.passage — this pipeline embeds rows being indexed. The query-side
+# CLI (product_search_tool.cpp) uses config_product_query.toml instead, with
+# the retrieval.query adapter — see that file for why they can't share one.
+lora_path  = "/home/debian/models/jina-embeddings-v3/lora-retrieval.passage-jina-embeddings-v3-f16.gguf"
+lora_scale = 1.0
+dimensions = 1024
+n_threads  = 4
+n_ctx      = 512

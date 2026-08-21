@@ -1,0 +1,18 @@
+# Embedding config for product_search_tool.cpp only — NOT a walkrie
+# ingestion config (no [[source]]/[[sink]], and the tool never calls
+# AppConfig::validate(), so this minimal [embedding]-only file is enough).
+#
+# Same base model as config_product_demo.toml, but the retrieval.query LoRA
+# adapter instead of retrieval.passage — a search query and an indexed
+# product description aren't the same kind of text to jina-embeddings-v3,
+# and one loaded adapter is fixed for a provider's whole lifetime, so the
+# ingestion pipeline and this CLI each need their own config.
+
+[embedding]
+provider   = "llama"
+model_path = "/home/debian/models/jina-embeddings-v3/jina-embeddings-v3-Q4_K_M.gguf"
+lora_path  = "/home/debian/models/jina-embeddings-v3/lora-retrieval.query-jina-embeddings-v3-f16.gguf"
+lora_scale = 1.0
+dimensions = 1024
+n_threads  = 4
+n_ctx      = 512
